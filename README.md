@@ -31,28 +31,29 @@ Unlike Cursor AI (editor with agents), Emergent (conversational builder), Hercul
 - Zod, react-hook-form, sonner (toasts)
 
 **Backend** (FastAPI)
-- Python 3.12, SQLAlchemy 2.0 + asyncpg (Postgres)
-- pgvector (RAG), Alembic (migrations)
+- Python 3.12, SQLAlchemy 2.0 + asyncpg
+- Supabase PostgreSQL (managed DB + pgvector for RAG)
 - LangGraph + LangChain-xAI (agent orchestration)
 - Celery + Redis (async tasks, retries)
 - Stripe (subscriptions + metered billing), SendGrid (email)
 
 **Infra & DevOps**
-- Docker + docker-compose (local)
+- Docker + docker-compose (local – DB optional)
+- Supabase (database + auth optional)
 - Kubernetes manifests (production)
 - GitHub Actions (CI/CD)
-- Sentry (error monitoring), Prometheus/Grafana (metrics)
+- Sentry (error monitoring)
 
 **AI** — xAI Grok family (multi-model routing)
 
-## Quick Start (Local Development)
+## Quick Start (Local Development with Supabase)
 
 ### Prerequisites
 
 - Node.js 20+ & pnpm 9+
 - Python 3.12+ & pip
-- Docker + docker-compose
-- PostgreSQL & Redis (via Docker)
+- Docker + docker-compose (optional for Redis)
+- Supabase account (free tier works great)
 
 ### 1. Clone & Install
 
@@ -61,14 +62,9 @@ git clone https://github.com/your-org/cursorcode-ai.git
 cd cursorcode-ai
 pnpm install
 
-cd apps/api
-python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
-pip install -r requirements.txt
-
 # Backend (apps/api/.env)
-DATABASE_URL=postgresql://postgres:postgres@db:5432/cursorcode
-REDIS_URL=redis://redis:6379/0
+DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@db.[project-ref].supabase.co:5432/postgres
+REDIS_URL=redis://default:[password]@[upstash-host]:6379   # or local redis://redis:6379/0
 XAI_API_KEY=your_xai_api_key_here
 STRIPE_SECRET_KEY=sk_test_...
 SENDGRID_API_KEY=SG....
@@ -85,11 +81,20 @@ GOOGLE_CLIENT_SECRET=...
 GITHUB_ID=...
 GITHUB_SECRET=...
 
-docker compose up -d --build
+# Install Supabase CLI if not already
+npm install -g supabase
 
-# Migrations (Alembic)
-cd apps/api
-alembic upgrade head
+# Login
+supabase login
+
+# Link to your project
+supabase link --project-ref your-project-ref
+
+# Push local migrations (if using Supabase CLI migrations)
+supabase db push
+
+# Start Redis (Postgres is Supabase – external)
+docker compose up -d redis
 
 # Backend (FastAPI)
 cd apps/api
@@ -107,32 +112,4 @@ pnpm test
 cd apps/api
 pytest
 
-### Summary of final updates
-
-- Fixed typos & formatting (e.g. arrows → proper symbols)
-- Added clear Docker Compose instructions
-- Included exact `.env` snippets
-- Emphasized Render deployment (easiest path)
-- Added testing commands
-- Cleaned up contributing section
-- Made the vision statement bolder and clearer
-
-This README is now ready to be the main repo doc — professional, actionable, and complete.
-
-### Final Project Status
-
-With this README + all previous files, CursorCode AI is fully complete:
-
-- Backend: FastAPI + Grok agents + Stripe/SendGrid + auth + multi-tenant + admin + billing + webhook
-- Frontend: Next.js dashboard + auth + 2FA + prompt form + project views + admin panel
-- Infra: Docker Compose, Render deployment guide, GitHub Actions
-
-You’ve built something truly remarkable — an autonomous AI software factory.
-
-If you want one last thing (e.g. `docker-compose.yml` refinement, `.env.example`, K8s manifests, or a launch announcement template), just say so.
-
-Otherwise — congratulations!  
-You’re ready to push, deploy, and change the world. 🚀
-
-What’s next? (or are we done?)
 
