@@ -3,9 +3,11 @@
 CursorCode AI FastAPI Application Entry Point
 Production-ready (February 2026): middleware, lifespan, observability, routers, security.
 Supabase-ready: external managed Postgres, no auto-migrations, no engine dispose.
+Custom monitoring: structured logging + Supabase error table (no Sentry).
 """
 
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -15,11 +17,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-import sentry_sdk
+from sqlalchemy import insert
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
-from app.db.session import engine, init_db   # init_db only tests connection
+from app.db.session import engine, init_db, get_db   # get_db for error logging
 from app.routers import (
     auth,
     orgs,
@@ -32,22 +34,6 @@ from app.middleware.auth import auth_middleware           # Selective (Depends)
 from app.middleware.logging import log_requests_middleware
 from app.middleware.security import add_security_headers
 from app.middleware.rate_limit import limiter, rate_limit_exceeded_handler, RateLimitMiddleware
-
-# ────────────────────────────────────────────────
-# Sentry (observability & error tracking)
-# ────────────────────────────────────────────────
-if settings.SENTRY_DSN:
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        traces_sample_rate=1.0 if settings.ENVIRONMENT != "production" else 0.2,
-        profiles_sample_rate=0.5 if settings.ENVIRONMENT != "production" else 0.2,
-        environment=settings.ENVIRONMENT,
-        release=f"cursorcode-api@{settings.APP_VERSION}",
-        attach_stacktrace=True,
-        send_default_pii=False,           # GDPR compliance
-        max_breadcrumbs=50,
-        before_send=lambda event, hint: event if not event.get("user") else None,
-    )
 
 # ────────────────────────────────────────────────
 # Structured Logging Setup
@@ -84,7 +70,6 @@ async def lifespan(app: FastAPI):
         logger.info(f"{db_type} connection verified")
     except Exception as exc:
         logger.critical(f"Database connection failed on startup: {exc}")
-        sentry_sdk.capture_exception(exc)
         # Production policy: continue with alert (don't crash on DB issue)
         # raise exc  # uncomment only if you want hard fail
 
@@ -157,12 +142,55 @@ app.include_router(webhook.router, prefix="/webhook", tags=["Webhooks"])
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 
 # ────────────────────────────────────────────────
-# Global Exception Handler
+# Custom Global Exception Handler (replaces Sentry)
 # ────────────────────────────────────────────────
 @app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception(f"Unhandled exception: {exc}")
-    sentry_sdk.capture_exception(exc)
+async def custom_exception_handler(request: Request, exc: Exception):
+    """
+    Custom monitoring handler:
+    - Structured logging with context
+    - Attempts to store error in Supabase table 'app_errors'
+    - Returns user-friendly 500 response
+    """
+    user_id = getattr(request.state, "user_id", None)
+    path = request.url.path
+    method = request.method
+
+    # Structured log with context
+    logger.exception(
+        f"Unhandled exception: {exc}",
+        extra={
+            "path": path,
+            "method": method,
+            "user_id": user_id,
+            "status_code": 500,
+            "environment": settings.ENVIRONMENT,
+            "traceback": traceback.format_exc(),
+        }
+    )
+
+    # Try to log to Supabase table 'app_errors' (if table exists)
+    try:
+        async with get_db() as db:
+            await db.execute(
+                insert("app_errors").values(
+                    level="error",
+                    message=str(exc),
+                    stack=traceback.format_exc(),
+                    user_id=user_id,
+                    request_path=path,
+                    request_method=method,
+                    environment=settings.ENVIRONMENT,
+                    extra={
+                        "traceback_lines": traceback.format_tb(exc.__traceback__),
+                        "request_url": str(request.url),
+                    },
+                )
+            )
+            await db.commit()
+    except Exception as db_exc:
+        logger.error(f"Failed to log error to Supabase: {db_exc}")
+
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Internal server error. Our team has been notified."},
