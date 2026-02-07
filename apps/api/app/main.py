@@ -1,7 +1,8 @@
 # apps/api/app/main.py
 """
 CursorCode AI FastAPI Application Entry Point
-Production-ready (February 2025–2026): middleware, lifespan, observability, routers, security.
+Production-ready (February 2026): middleware, lifespan, observability, routers, security.
+Supabase-ready: external managed Postgres, no auto-migrations on startup.
 """
 
 import logging
@@ -18,14 +19,14 @@ import sentry_sdk
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
-from app.db.session import engine, init_db
+from app.db.session import engine, init_db   # init_db now only tests connection
 from app.routers import (
     auth,
     orgs,
     projects,
     billing,
     webhook,
-    admin,           # Added admin router
+    admin,
 )
 from app.middleware.auth import auth_middleware           # Selective (Depends)
 from app.middleware.logging import log_requests_middleware
@@ -66,7 +67,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # ────────────────────────────────────────────────
-# Lifespan (startup & shutdown)
+# Lifespan (startup & shutdown) – Supabase-friendly
 # ────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -77,23 +78,25 @@ async def lifespan(app: FastAPI):
     )
 
     try:
-        await init_db()  # Test connection + optional migrations
-        logger.info("Database connection & migrations completed")
+        # Only test connection (no auto-migrations — use Supabase dashboard or CLI)
+        await init_db()
+        logger.info("Supabase PostgreSQL connection verified")
     except Exception as exc:
-        logger.critical(f"Database initialization failed: {exc}")
+        logger.critical(f"Supabase connection failed on startup: {exc}")
         sentry_sdk.capture_exception(exc)
-        # In production: decide policy — crash or continue with alert
-        # raise exc  # uncomment if you want to crash on startup failure
+        # In production: continue with alert (don't crash) unless critical
+        # raise exc  # uncomment only if you want hard fail on DB down
 
-    # Optional: warm caches, test Redis, etc.
+    # Optional: warm Redis cache, check Stripe/SendGrid connectivity, etc.
     # await redis_client.ping()
 
     yield
 
     # ── Shutdown ────────────────────────────────────
     logger.info("CursorCode AI API shutting down...")
-    await engine.dispose()
-    logger.info("Database engine disposed")
+    # Supabase pooling is external — no need to dispose engine aggressively
+    # await engine.dispose()  # optional; can cause warnings in some hosts
+    logger.info("Shutdown complete")
 
 
 # ────────────────────────────────────────────────
@@ -136,7 +139,7 @@ app.add_middleware(BaseHTTPMiddleware, dispatch=add_security_headers)
 # 3. Structured Request Logging
 app.add_middleware(BaseHTTPMiddleware, dispatch=log_requests_middleware)
 
-# 4. Rate Limiting Middleware (uses Redis + user-aware keys)
+# 4. Rate Limiting Middleware (Redis + user-aware keys)
 app.add_middleware(RateLimitMiddleware)
 
 # Custom auth middleware — applied selectively via Depends (not global)
@@ -166,7 +169,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # ────────────────────────────────────────────────
-# Health / Readiness / Liveness (K8s friendly)
+# Health / Readiness / Liveness (K8s / Render / Railway friendly)
 # ────────────────────────────────────────────────
 @app.get("/health", tags=["Health"])
 async def health_check():
@@ -175,7 +178,7 @@ async def health_check():
 
 @app.get("/ready", tags=["Health"])
 async def readiness_check():
-    # In real prod: add real checks (DB ping, Redis ping, etc.)
+    # In real prod: ping Supabase, Redis, Stripe connectivity if critical
     return {"status": "ready"}
 
 
@@ -189,18 +192,22 @@ async def liveness_check():
 # ────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup_event():
+    db_host = "Supabase" if "supabase" in str(settings.DATABASE_URL).lower() else \
+              (settings.DATABASE_URL.host if hasattr(settings.DATABASE_URL, 'host') else 'unknown')
+
+    redis_host = settings.REDIS_URL.host if hasattr(settings.REDIS_URL, 'host') else 'unknown'
+
     logger.info(
         f"CursorCode AI API v{settings.APP_VERSION} "
         f"started successfully in {settings.ENVIRONMENT.upper()} mode "
-        f"(DB: {settings.DATABASE_URL.host if hasattr(settings.DATABASE_URL, 'host') else 'unknown'}, "
-        f"Redis: {settings.REDIS_URL.host if hasattr(settings.REDIS_URL, 'host') else 'unknown'})"
+        f"(DB: {db_host}, Redis: {redis_host})"
     )
 
-    # Optional: notify admin/Slack on startup (production only)
+    # Optional: notify admin/Slack on production startup
     if settings.ENVIRONMENT == "production":
         # send_email_task.delay(
         #     to="admin@cursorcode.ai",
-        #     subject="API Started",
+        #     subject="API Started (Production)",
         #     template_id="d-api-startup",
         #     dynamic_data={"version": settings.APP_VERSION, "env": settings.ENVIRONMENT}
         # )
