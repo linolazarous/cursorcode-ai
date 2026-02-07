@@ -3,10 +3,11 @@
 Database session management for CursorCode AI.
 Async SQLAlchemy engine, session factory, and FastAPI dependency.
 Production-ready: connection pooling, transaction handling, async support.
+Supabase-ready: external managed Postgres, no engine dispose on shutdown.
 """
 
 import logging
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -14,24 +15,23 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────────
-# SQLAlchemy Async Engine
+# SQLAlchemy Async Engine (Supabase compatible)
 # ────────────────────────────────────────────────
 engine: AsyncEngine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.ENVIRONMENT == "development",  # SQL logging in dev only
+    echo=settings.ENVIRONMENT == "development",      # SQL logging in dev only
     future=True,
-    pool_pre_ping=True,                         # detect broken connections
-    pool_size=20,                               # max connections
-    max_overflow=10,                            # extra connections if pool full
-    pool_timeout=30,                            # wait time for connection
-    pool_recycle=3600,                          # recycle after 1 hour
+    pool_pre_ping=True,                              # Critical for Supabase pooling (detects stale connections)
+    pool_size=15,                                    # Conservative for Supabase free tier; increase on paid
+    max_overflow=5,
+    pool_timeout=30,
+    pool_recycle=1800,                               # Recycle every 30 min (helps with Supabase connection limits)
 )
 
 # ────────────────────────────────────────────────
@@ -71,26 +71,28 @@ def get_engine() -> AsyncEngine:
 
 
 # ────────────────────────────────────────────────
-# Optional: init function (call on startup if needed)
+# Init function (call on startup – only tests connection)
 # ────────────────────────────────────────────────
 async def init_db():
-    """Run on app startup – test connection, optional migrations, etc."""
+    """Run on app startup – test connection to Supabase Postgres."""
     try:
         async with engine.connect() as conn:
             await conn.execute("SELECT 1")
-        logger.info("Database connection successful")
+        db_type = "Supabase" if "supabase" in str(settings.DATABASE_URL).lower() else "PostgreSQL"
+        logger.info(f"{db_type} connection verified successfully")
     except Exception as e:
         logger.critical("Database connection failed on startup", exc_info=True)
         raise
 
 
 # ────────────────────────────────────────────────
-# Usage in main.py (lifespan or startup event)
+# Usage in main.py (lifespan)
 # ────────────────────────────────────────────────
 """
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
+    await init_db()           # only tests connection
     yield
-    await engine.dispose()
+    # No engine.dispose() needed with Supabase external pooling
+    logger.info("Shutdown complete")
 """
