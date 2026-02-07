@@ -18,13 +18,14 @@ from pydantic import (
     RedisDsn,
     SecretStr,
     field_validator,
+    model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """
     CursorCode AI API Settings
-    All values loaded from environment variables (.env or Kubernetes secrets).
+    All values loaded from environment variables (.env or platform secrets).
     """
 
     model_config = SettingsConfigDict(
@@ -44,19 +45,38 @@ class Settings(BaseSettings):
     # ────────────────────────────────────────────────
     # URLs & Domains
     # ────────────────────────────────────────────────
-    NEXT_PUBLIC_APP_URL: AnyHttpUrl = Field(..., alias="NEXT_PUBLIC_APP_URL")
-    FRONTEND_URL: AnyHttpUrl = Field(default_factory=lambda: "https://cursorcode.ai")
-    API_URL: AnyHttpUrl = Field(default_factory=lambda s: f"{s.NEXT_PUBLIC_APP_URL}/api")
+    FRONTEND_URL: AnyHttpUrl = Field(
+        ...,
+        description="Base URL of the frontend (used in emails, links, redirects)"
+    )
+
+    # Computed backend API URL (used internally & in emails)
+    @property
+    def API_URL(self) -> AnyHttpUrl:
+        """Computed API base URL (derived from FRONTEND_URL or fallback)."""
+        return AnyHttpUrl(f"{self.FRONTEND_URL}/api")
+
+    # Optional – only if needed for some legacy frontend links (rare in backend)
+    NEXT_PUBLIC_APP_URL: Optional[AnyHttpUrl] = Field(
+        default=None,
+        description="Frontend base URL (frontend-only; optional in backend)"
+    )
 
     # ────────────────────────────────────────────────
-    # Database
+    # Database (Supabase PostgreSQL)
     # ────────────────────────────────────────────────
-    DATABASE_URL: PostgresDsn = Field(..., description="PostgreSQL connection string")
+    DATABASE_URL: PostgresDsn = Field(
+        ...,
+        description="Supabase direct PostgreSQL connection string"
+    )
 
     # ────────────────────────────────────────────────
-    # Redis (caching, Celery, rate limiting, sessions)
+    # Redis (Upstash recommended)
     # ────────────────────────────────────────────────
-    REDIS_URL: RedisDsn = Field(..., description="Redis connection string")
+    REDIS_URL: RedisDsn = Field(
+        ...,
+        description="Upstash or Redis connection string"
+    )
 
     # ────────────────────────────────────────────────
     # Stripe Billing
@@ -64,29 +84,6 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: SecretStr
     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: str
     STRIPE_WEBHOOK_SECRET: SecretStr
-    STRIPE_STANDARD_PRICE_ID: str
-    STRIPE_PRO_PRICE_ID: str
-    STRIPE_PREMIER_PRICE_ID: str
-    STRIPE_ULTRA_PRICE_ID: str
-
-    # Plan credits mapping
-    STRIPE_PLAN_CREDITS: Dict[str, int] = Field(
-        default_factory=lambda: {
-            "starter": 10,
-            "standard": 75,
-            "pro": 150,
-            "premier": 600,
-            "ultra": 2000,
-        }
-    )
-
-    # ────────────────────────────────────────────────
-    # xAI / Grok API
-    # ────────────────────────────────────────────────
-    XAI_API_KEY: SecretStr
-    DEFAULT_XAI_MODEL: str = "grok-4-latest"
-    FAST_REASONING_MODEL: str = "grok-4-1-fast-reasoning"
-    FAST_NON_REASONING_MODEL: str = "grok-4-1-fast-non-reasoning"
 
     # ────────────────────────────────────────────────
     # SendGrid Email
@@ -99,6 +96,14 @@ class Settings(BaseSettings):
     SENDGRID_2FA_DISABLED_TEMPLATE_ID: str = Field(..., description="2FA disabled template")
 
     # ────────────────────────────────────────────────
+    # xAI / Grok API
+    # ────────────────────────────────────────────────
+    XAI_API_KEY: SecretStr
+    DEFAULT_XAI_MODEL: str = "grok-4-latest"
+    FAST_REASONING_MODEL: str = "grok-4-1-fast-reasoning"
+    FAST_NON_REASONING_MODEL: str = "grok-4-1-fast-non-reasoning"
+
+    # ────────────────────────────────────────────────
     # JWT & Security
     # ────────────────────────────────────────────────
     JWT_SECRET_KEY: SecretStr
@@ -107,24 +112,22 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     COOKIE_SECURE: bool = True  # Set False in dev
-    COOKIE_DEFAULTS: Dict[str, Any] = Field(default_factory=lambda s: {
+    COOKIE_DEFAULTS: Dict[str, Any] = Field(default_factory=lambda: {
         "httponly": True,
-        "secure": s.COOKIE_SECURE,
+        "secure": True,  # overridden by COOKIE_SECURE
         "samesite": "strict",
         "path": "/",
     })
 
     # ────────────────────────────────────────────────
-    # Observability
+    # Observability & Custom Monitoring
     # ────────────────────────────────────────────────
-    SENTRY_DSN: Optional[HttpUrl] = None
-    SENTRY_TRACES_SAMPLE_RATE: float = 0.2
-    AUDIT_ALL_AUTH: bool = False  # High volume → sample only in prod
+    # SENTRY_DSN: Optional[HttpUrl] = None  # Removed - using custom Supabase logging
 
     # ────────────────────────────────────────────────
     # CORS (frontend origins)
     # ────────────────────────────────────────────────
-    CORS_ORIGINS: List[AnyHttpUrl] = Field(default_factory=lambda s: [s.FRONTEND_URL])
+    CORS_ORIGINS: List[AnyHttpUrl] = Field(default_factory=lambda self: [self.FRONTEND_URL])
 
     # ────────────────────────────────────────────────
     # Computed / Helpers
@@ -146,7 +149,11 @@ class Settings(BaseSettings):
         return self.ENVIRONMENT == "development"
 
     def get_cookie_options(self, max_age: int) -> Dict[str, Any]:
-        return {**self.COOKIE_DEFAULTS, "max_age": max_age}
+        opts = self.COOKIE_DEFAULTS.copy()
+        opts["max_age"] = max_age
+        opts["secure"] = self.COOKIE_SECURE
+        return opts
+
 
 # ────────────────────────────────────────────────
 # Singleton instance (cached)
