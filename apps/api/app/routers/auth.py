@@ -2,6 +2,7 @@
 """
 Authentication Router - CursorCode AI
 Full production auth system (2026 standards) with rate limiting on all sensitive endpoints.
+Migrated from SendGrid → Resend (plain HTML emails).
 """
 
 import logging
@@ -135,12 +136,23 @@ async def signup(
     await db.refresh(user)
 
     verification_url = f"{settings.FRONTEND_URL}/auth/verify?token={verification_token}"
+
+    html = f"""
+    <h2>Welcome to CursorCode AI!</h2>
+    <p>Thank you for signing up.</p>
+    <p>Please verify your email by clicking the link below:</p>
+    <p><a href="{verification_url}">Verify Email Address</a></p>
+    <p>This link expires in 24 hours.</p>
+    <p>If you didn't create this account, you can safely ignore this email.</p>
+    <br>
+    <p>Best regards,<br>CursorCode AI Team</p>
+    """
+
     background_tasks.add_task(
         send_email_task,
         to=user.email,
         subject="Verify Your CursorCode AI Account",
-        template_id=settings.SENDGRID_VERIFY_TEMPLATE_ID,
-        dynamic_data={"verification_url": verification_url, "expires_in_hours": 24}
+        html=html
     )
 
     audit_log.delay(user.id, "signup", {"email": payload.email, "ip": request.client.host})
@@ -246,12 +258,23 @@ async def request_password_reset(
     await db.commit()
 
     reset_url = f"{settings.FRONTEND_URL}/auth/reset-password?token={reset_token}"
+
+    html = f"""
+    <h2>Password Reset Request</h2>
+    <p>You (or someone else) requested a password reset for your CursorCode AI account.</p>
+    <p>Click the link below to set a new password:</p>
+    <p><a href="{reset_url}">Reset Password</a></p>
+    <p>This link expires in 1 hour.</p>
+    <p>If you did not request this, you can safely ignore this email.</p>
+    <br>
+    <p>Best regards,<br>CursorCode AI Team</p>
+    """
+
     background_tasks.add_task(
         send_email_task,
         to=user.email,
         subject="Reset Your CursorCode AI Password",
-        template_id=settings.SENDGRID_RESET_TEMPLATE_ID,
-        dynamic_data={"reset_url": reset_url, "expires_in_hours": 1}
+        html=html
     )
 
     audit_log.delay(user.id, "reset_password_requested", {"ip": request.client.host})
@@ -354,11 +377,19 @@ async def verify_2fa_setup(
 
     audit_log.delay(current_user.id, "2fa_verified_setup", {})
 
+    html = f"""
+    <h2>2FA Enabled on Your Account</h2>
+    <p>Two-factor authentication has been successfully enabled for your CursorCode AI account.</p>
+    <p>Your account is now more secure.</p>
+    <p>If this was not you, please contact support immediately.</p>
+    <br>
+    <p>Best regards,<br>CursorCode AI Team</p>
+    """
+
     send_email_task.delay(
         to=current_user.email,
         subject="2FA Enabled on Your Account",
-        template_id=settings.SENDGRID_2FA_ENABLED_TEMPLATE_ID,
-        dynamic_data={"email": current_user.email}
+        html=html
     )
 
     return {"message": "2FA enabled successfully"}
