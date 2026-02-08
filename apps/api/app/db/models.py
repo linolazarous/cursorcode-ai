@@ -2,6 +2,7 @@
 """
 Central location for all SQLAlchemy model imports.
 Use this file to import models throughout the app.
+
 This avoids circular import issues and keeps imports clean.
 
 All models should inherit from Base (defined in app/db/base.py).
@@ -14,15 +15,11 @@ from .base import Base  # Declarative base class — all models inherit from thi
 from .user import User, Org, UserRole
 from .project import Project, ProjectStatus
 from .audit import AuditLog
-
-# ────────────────────────────────────────────────
-# Models added from recent features (billing, plans, etc.)
-# ────────────────────────────────────────────────
 from .plan import Plan               # Billing plans with Stripe price IDs
 
 # ────────────────────────────────────────────────
 # Export commonly used types/enums/models
-# This makes it easy to do: from app.db.models import User, Plan, Base
+# This makes it easy to do: from app.db.models import User, Plan, Base, ...
 # ────────────────────────────────────────────────
 __all__ = [
     # Base class
@@ -42,4 +39,6 @@ __all__ = [
     
     # Billing / Plans
     "Plan",
+    
+    # Add future models here (e.g. "Subscription", "CreditTransaction", etc.)
 ]
