@@ -7,8 +7,9 @@ Statistics, user management, subscriptions, failed builds, maintenance, error lo
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Annotated, List, Dict, Any, Optional
+from zoneinfo import ZoneInfo  # Modern timezone handling
 
 from fastapi import (
     APIRouter,
@@ -17,6 +18,7 @@ from fastapi import (
     status,
     Query,
     Body,
+    Request,  # For future rate limiting or logging
 )
 from sqlalchemy import select, func, desc, insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,7 +50,7 @@ async def get_platform_overview_stats(
     """
     High-level platform stats (users, orgs, projects, subscriptions).
     """
-    since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    since = datetime.now(ZoneInfo("UTC")) - timedelta(days=lookback_days)
 
     stats = {}
 
@@ -86,7 +88,7 @@ async def get_platform_overview_stats(
         ),
     }
 
-    # Subscriptions
+    # Subscriptions (assuming User has plan/subscription_status)
     stats["subscriptions"] = {
         "total_active": await db.scalar(
             select(func.count(User.id)).where(User.subscription_status == "active")
@@ -100,10 +102,10 @@ async def get_platform_overview_stats(
     # Recent activity (24h)
     stats["recent_activity"] = {
         "new_users_24h": await db.scalar(
-            select(func.count(User.id)).where(User.created_at >= datetime.now(timezone.utc) - timedelta(hours=24))
+            select(func.count(User.id)).where(User.created_at >= datetime.now(ZoneInfo("UTC")) - timedelta(hours=24))
         ),
         "new_projects_24h": await db.scalar(
-            select(func.count(Project.id)).where(Project.created_at >= datetime.now(timezone.utc) - timedelta(hours=24))
+            select(func.count(Project.id)).where(Project.created_at >= datetime.now(ZoneInfo("UTC")) - timedelta(hours=24))
         ),
     }
 
@@ -197,7 +199,7 @@ async def get_failed_projects(
     """
     List failed projects from the last N days.
     """
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    since = datetime.now(ZoneInfo("UTC")) - timedelta(days=days)
 
     stmt = (
         select(Project)
@@ -287,10 +289,10 @@ async def toggle_maintenance_mode(
     """
     Toggle global maintenance mode (stored in Redis or DB config).
     """
-    # In real implementation: store in Redis or Supabase config table
-    # Example with Redis:
-    # redis_client.set("maintenance:enabled", "1" if enabled else "0", ex=86400*7)
-    # redis_client.set("maintenance:message", message, ex=86400*7)
+    # TODO: Implement real storage (Redis or Supabase config table)
+    # Example with Redis (uncomment when Redis is ready):
+    # await redis_client.set("maintenance:enabled", "1" if enabled else "0", ex=86400*7)
+    # await redis_client.set("maintenance:message", message, ex=86400*7)
 
     audit_log.delay(
         user_id=current_user.id,
@@ -302,7 +304,7 @@ async def toggle_maintenance_mode(
         "status": "maintenance" if enabled else "normal",
         "message": message,
         "changed_by": current_user.email,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": datetime.now(ZoneInfo("UTC")).isoformat()
     }
 
 
