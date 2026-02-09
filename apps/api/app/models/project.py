@@ -10,7 +10,6 @@ from typing import List, Optional
 from uuid import uuid4
 
 from sqlalchemy import (
-    Boolean,
     ForeignKey,
     Index,
     Integer,
@@ -19,7 +18,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ENUM  # ← Added ENUM here!
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from enum import Enum as PyEnum
 
@@ -50,12 +49,11 @@ class Project(Base):
 
     __tablename__ = "projects"
 
-    # Correct __table_args__: indexes first, dict last
     __table_args__ = (
         Index("ix_projects_user_id_status", "user_id", "status"),
         Index("ix_projects_org_id", "org_id"),
         Index("ix_projects_deploy_url", "deploy_url"),
-        {'extend_existing': True},  # ← dict as last element
+        {'extend_existing': True},
     )
 
     id: Mapped[str] = mapped_column(
