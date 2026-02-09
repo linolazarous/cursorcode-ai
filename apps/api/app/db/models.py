@@ -11,15 +11,18 @@ Order of imports matters when there are relationships between models.
 
 from .base import Base  # Declarative base class — all models inherit from this
 
+# ────────────────────────────────────────────────
 # Import all models here (order matters for relationships)
+# ────────────────────────────────────────────────
 from .user import User, Org, UserRole
 from .project import Project, ProjectStatus
 from .audit import AuditLog
-from .plan import Plan               # Billing plans with Stripe price IDs
+from .plan import Plan
 
 # ────────────────────────────────────────────────
 # Export commonly used types/enums/models
-# This makes it easy to do: from app.db.models import User, Plan, Base, ...
+# This makes it easy to do:
+#     from app.db.models import User, Org, Plan, Base, ...
 # ────────────────────────────────────────────────
 __all__ = [
     # Base class
@@ -40,5 +43,6 @@ __all__ = [
     # Billing / Plans
     "Plan",
     
-    # Add future models here (e.g. "Subscription", "CreditTransaction", etc.)
+    # Add future models here when created
+    # e.g. "Subscription", "CreditTransaction", "Payment", "Invitation", "TeamMember", ...
 ]
