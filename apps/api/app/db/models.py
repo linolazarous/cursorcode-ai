@@ -13,10 +13,14 @@ from .base import Base  # Declarative base class — all models inherit from thi
 
 # ────────────────────────────────────────────────
 # Import all models here (order matters for relationships)
+# Core first → dependencies later
 # ────────────────────────────────────────────────
 from .user import User, Org, UserRole
+
 from .project import Project, ProjectStatus
+
 from .audit import AuditLog
+
 from .plan import Plan
 
 # ────────────────────────────────────────────────
@@ -43,6 +47,6 @@ __all__ = [
     # Billing / Plans
     "Plan",
     
-    # Add future models here when created
-    # e.g. "Subscription", "CreditTransaction", "Payment", "Invitation", "TeamMember", ...
+    # Add future models here when created (keep in dependency order)
+    # e.g. "Subscription", "CreditTransaction", "Payment", "Invitation", "TeamMember"
 ]
