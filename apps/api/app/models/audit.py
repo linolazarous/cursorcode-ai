@@ -1,7 +1,7 @@
 # apps/api/app/models/audit.py
 """
 AuditLog model for CursorCode AI
-Tracks user actions, admin operations, auth events, API calls, etc.
+Tracks user actions, admin operations, auth events, etc.
 """
 
 from datetime import datetime
@@ -40,8 +40,8 @@ class AuditLog(Base):
         comment="Action identifier (e.g. 'login_success', '2fa_enabled', 'project_created')"
     )
 
-    # Additional context (JSON)
-    metadata: Mapped[dict] = mapped_column(
+    # Additional context (JSON) — renamed to avoid conflict with Base.metadata
+    event_metadata: Mapped[dict] = mapped_column(
         JSON,
         nullable=False,
         server_default="{}",
