@@ -7,7 +7,8 @@ Only org_owners/admins can manage their org.
 """
 
 import logging
-from typing import List, Annotated, Optional, Dict
+from datetime import datetime
+from typing import Dict, List, Annotated, Optional
 from uuid import UUID
 
 from fastapi import (
@@ -15,9 +16,7 @@ from fastapi import (
     Depends,
     HTTPException,
     status,
-    BackgroundTasks,
-    Query,
-    Request,           # ← Required for slowapi rate limiting
+    Request,
     Response,
 )
 from pydantic import BaseModel, Field
@@ -36,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/orgs", tags=["Organizations"])
 
+# Rate limiter — uses client IP
 limiter = Limiter(key_func=lambda r: r.client.host)
 
 
@@ -55,7 +55,7 @@ class OrgOut(BaseModel):
     slug: Optional[str]
     created_at: datetime
     updated_at: datetime
-    member_count: int = 0  # Computed
+    member_count: int = 0
 
     class Config:
         from_attributes = True
@@ -69,7 +69,7 @@ class OrgOut(BaseModel):
 )
 @limiter.limit("3/minute")
 async def create_org(
-    request: Request,  # ← Required for slowapi
+    request: Request,
     payload: OrgCreate,
     current_user: Annotated[AuthUser, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
@@ -90,8 +90,11 @@ async def create_org(
     db.add(org)
     await db.flush()  # Get org.id
 
-    # Assign user as owner
+    # Assign current user as owner
     user = await db.get(User, UUID(current_user.id))
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+
     user.org_id = org.id
     user.roles.append("org_owner")
 
@@ -125,7 +128,7 @@ async def list_orgs(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    List all orgs the user is a member of.
+    List all organizations the current user is a member of.
     """
     stmt = (
         select(Org)
@@ -136,7 +139,7 @@ async def list_orgs(
     result = await db.execute(stmt)
     orgs = result.scalars().all()
 
-    # Compute member count
+    # Compute member count efficiently
     for org in orgs:
         count_stmt = select(func.count(User.id)).where(User.org_id == org.id)
         count = await db.scalar(count_stmt)
@@ -156,7 +159,7 @@ async def get_org(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Retrieve organization (must belong to it).
+    Retrieve organization details (must be a member).
     """
     org = await db.get(Org, org_id)
     if not org:
@@ -179,24 +182,27 @@ async def get_org(
 )
 @limiter.limit("3/minute")
 async def update_org(
-    request: Request,  # ← Required for slowapi
+    request: Request,
     org_id: UUID,
     payload: OrgUpdate,
     current_user: Annotated[AuthUser, Depends(require_org_owner)],
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Update org details (name, slug).
+    Update organization name or slug.
     Only org_owner can modify.
     """
     org = await db.get(Org, org_id)
     if not org or UUID(current_user.org_id) != org_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Organization not found")
 
-    if payload.name:
+    if payload.name is not None:
         org.name = payload.name
-    if payload.slug:
-        existing = await db.scalar(select(Org).where(Org.slug == payload.slug, Org.id != org_id))
+
+    if payload.slug is not None:
+        existing = await db.scalar(
+            select(Org).where(Org.slug == payload.slug, Org.id != org_id)
+        )
         if existing:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Slug already in use")
         org.slug = payload.slug
@@ -216,24 +222,24 @@ async def update_org(
 @router.delete(
     "/{org_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete/soft-delete organization",
+    summary="Soft-delete organization",
 )
 @limiter.limit("1/minute")
 async def delete_org(
-    request: Request,  # ← Required for slowapi
+    request: Request,
     org_id: UUID,
     current_user: Annotated[AuthUser, Depends(require_org_owner)],
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Soft-delete organization (only org_owner).
-    Cascades to users/projects via DB constraints.
+    Soft-delete organization (sets deleted_at).
+    Only org_owner can delete.
     """
     org = await db.get(Org, org_id)
     if not org or UUID(current_user.org_id) != org_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Organization not found")
 
-    org.deleted_at = datetime.now(timezone.utc)
+    org.deleted_at = datetime.utcnow()
     await db.commit()
 
     audit_log.delay(
@@ -252,20 +258,23 @@ async def delete_org(
 )
 @limiter.limit("5/minute")
 async def switch_org(
-    request: Request,  # ← Required for slowapi
+    request: Request,
     org_id: UUID,
     current_user: Annotated[AuthUser, Depends(get_current_user)],
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Switch current active org (future-proof for multi-org JWT claims).
+    Switch the user's active organization.
+    Future-proof for updating JWT claims on refresh.
     """
     membership = await db.scalar(
         select(User).where(User.id == UUID(current_user.id), User.org_id == org_id)
     )
     if not membership:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not a member of this organization")
+
+    # TODO: In future — issue new JWT with updated org_id claim
 
     audit_log.delay(
         current_user.id,
