@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, func
+from sqlalchemy import Boolean, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,7 +24,13 @@ class Plan(Base):
     - Used for dynamic checkout session creation
     - Supports future features like credit allowances, features list
     """
+
     __tablename__ = "plans"
+
+    __table_args__ = (
+        Index("ix_plans_name", "name", unique=True),
+        {'extend_existing': True},  # Safeguard against duplicate table registration
+    )
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=True),
@@ -40,18 +46,21 @@ class Plan(Base):
         unique=True,
         nullable=False,
         index=True,
-    )  # e.g. "starter", "pro", "ultra"
+        comment="Internal plan key (e.g. 'starter', 'pro', 'ultra')"
+    )
 
     # Display name for UI/emails
     display_name: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
-    )  # e.g. "Starter Plan", "Pro Plan"
+        comment="Human-readable name (e.g. 'Starter Plan', 'Pro Plan')"
+    )
 
     # Pricing in USD cents (e.g. 999 = $9.99)
     price_usd_cents: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
+        comment="Price in USD cents (smallest unit)"
     )
 
     # Recurring interval
@@ -59,16 +68,19 @@ class Plan(Base):
         String(20),
         default="month",
         nullable=False,
-    )  # "month" or "year"
+        comment="'month' or 'year'"
+    )
 
     # Stripe integration
     stripe_product_id: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
+        comment="Stripe Product ID"
     )
     stripe_price_id: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
+        comment="Stripe Price ID for recurring billing"
     )
 
     # Plan status
@@ -76,23 +88,22 @@ class Plan(Base):
         Boolean,
         default=True,
         nullable=False,
+        comment="Whether this plan is available for new signups"
     )
 
     # Optional: monthly credit allowance for this plan
     monthly_credits: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True,
-        default=None,
-    )  # e.g. 1000 credits/mo for Pro
+        comment="Monthly credits included (null = unlimited or custom)"
+    )
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
