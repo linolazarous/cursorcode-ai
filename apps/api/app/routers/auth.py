@@ -20,7 +20,7 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     HTTPException,
-    Request,
+    Request,          # Required for slowapi rate limiting
     Response,
     status,
 )
@@ -326,6 +326,7 @@ async def confirm_password_reset(
 @router.post("/2fa/enable", response_model=QRResponse)
 @limiter.limit("5/minute")
 async def enable_2fa(
+    request: Request,  # ← Required for slowapi
     current_user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db)
 ):
@@ -361,6 +362,7 @@ async def enable_2fa(
 @router.post("/2fa/verify")
 @limiter.limit("15/minute")
 async def verify_2fa_setup(
+    request: Request,  # ← Required for slowapi
     payload: Verify2FARequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db)
