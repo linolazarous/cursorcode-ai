@@ -1,7 +1,7 @@
 # apps/api/app/ai/llm.py
 """
 Grok LLM Factory - CursorCode AI
-Creates routed ChatXAI instances with optimal model, parameters, and tools.
+Creates routed ChatGroq instances with optimal model, parameters, and tools.
 Production-ready (February 2026): caching, tier-aware routing, dynamic params.
 Uses custom programmatic monitoring instead of Sentry.
 """
@@ -10,7 +10,7 @@ import logging
 from functools import lru_cache
 from typing import List, Optional, Dict, Any
 
-from langchain_xai import ChatXAI
+from langchain_groq import ChatGroq           # ← Official LangChain + Grok integration
 from langchain_core.tools import BaseTool
 
 from app.core.config import settings
@@ -31,15 +31,15 @@ def get_llm(
     frequency_penalty: float = 0.0,
     presence_penalty: float = 0.0,
     tools: Optional[List[BaseTool]] = None,
-) -> ChatXAI:
+) -> ChatGroq:
     """
     Cached LLM instance factory.
     Caches based on model + generation params to avoid recreating objects.
     """
-    llm = ChatXAI(
+    llm = ChatGroq(
         model=model_name,
-        api_key=settings.XAI_API_KEY.get_secret_value(),
-        base_url="https://api.x.ai/v1",
+        groq_api_key=settings.XAI_API_KEY.get_secret_value(),
+        base_url="https://api.x.ai/v1",           # xAI endpoint
         temperature=temperature,
         max_tokens=max_tokens,
         top_p=top_p,
@@ -65,9 +65,9 @@ def get_routed_llm(
     tools: Optional[List[BaseTool]] = None,
     override_temperature: Optional[float] = None,
     override_max_tokens: Optional[int] = None,
-) -> ChatXAI:
+) -> ChatGroq:
     """
-    Returns fully configured ChatXAI instance for the given agent/task.
+    Returns fully configured ChatGroq instance for the given agent/task.
     Uses router to select model, applies tier/complexity-aware params.
     """
     # 1. Route to optimal model
