@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./apps/web/public/logo.png" alt="CursorCode AI Logo" width="180" />
+  <img src="https://raw.githubusercontent.com/your-org/cursorcode-ai/main/apps/web/public/logo.svg" alt="CursorCode AI Logo" width="180" />
 </p>
 
 <h1 align="center">CursorCode AI</h1>
@@ -9,93 +9,101 @@
 </p>
 
 <p align="center">
-  <a href="https://cursorcode.ai">🌐 Live</a> ·
+  <a href="https://cursorcode.ai">🌐 Live Demo</a> ·
+  <a href="https://github.com/your-org/cursorcode-ai/issues/new">🐛 Report Bug</a> ·
   <a href="mailto:info@cursorcode.ai">📧 Contact</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/your-org/cursorcode-ai/stargazers">
+    <img src="https://img.shields.io/github/stars/your-org/cursorcode-ai?style=social" alt="GitHub stars" />
+  </a>
+  <a href="https://github.com/your-org/cursorcode-ai/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/your-org/cursorcode-ai" alt="License" />
+  </a>
+  <a href="https://github.com/your-org/cursorcode-ai/actions">
+    <img src="https://img.shields.io/github/actions/workflow/status/your-org/cursorcode-ai/ci.yml?branch=main" alt="CI Status" />
+  </a>
 </p>
 
 ---
 
 ## What is CursorCode AI?
 
-**CursorCode AI** is a fully autonomous AI software engineering platform — powered by **xAI’s Grok family** with intelligent multi-model routing.
+**CursorCode AI** is a fully autonomous AI software engineering platform powered by **xAI’s Grok family** with intelligent multi-model routing.
 
-It goes far beyond copilots and no-code tools.
+It goes far beyond code copilots, no-code builders, or conversational agents.
 
-CursorCode AI understands natural language prompts, **designs system architecture, writes production-grade code, tests, secures, deploys, and maintains full-stack applications** — end to end, with **zero manual DevOps**.
+CursorCode AI takes a natural language prompt and **designs, codes, tests, secures, deploys, and maintains full-stack applications** — end-to-end, with **zero manual DevOps**.
 
 Unlike:
-- **Cursor AI** (editor + agents)
-- **Emergent** (conversational builder)
-- **Hercules** (regulated workflows)
-- **Code Conductor** (no-code)
+- **Cursor AI** — powerful editor + agents
+- **Emergent** — conversational builder
+- **Hercules** — regulated workflows
+- **Code Conductor** — no-code focus
 
-CursorCode AI operates as a **self-directing AI engineering organization**, capable of delivering enterprise-ready **SaaS platforms, mobile apps, and AI-native products** autonomously.
+CursorCode AI behaves like a **self-directed AI engineering team** capable of delivering enterprise-ready SaaS platforms, mobile apps, and AI-native products completely autonomously.
 
 ---
 
 ## Core Capabilities
 
-- **Natural language → complete production codebases**
-  - Next.js, FastAPI, PostgreSQL, Stripe, Auth, RBAC, and more
-- **Multi-agent architecture**
-  - Architect → Frontend → Backend → Security/QA → DevOps
-- **Grok-powered multi-model routing**
-  - `grok-4-latest` – deep reasoning & architecture
-  - `grok-4-1-fast-reasoning` – agent execution & tools
-  - `grok-4-1-fast-non-reasoning` – high-throughput tasks
-- **Real-time memory & RAG**
-  - pgvector, long-term project memory, self-debugging
-- **Automated testing & self-healing**
-- **Native & external deployments**
-  - `*.cursorcode.app`, Vercel, Railway, Render, Fly.io
-- **Built-in billing & notifications**
-  - Stripe (subscriptions + metered usage), SendGrid
-- **Enterprise-grade security**
-  - JWT, OAuth, 2FA/TOTP, RBAC, multi-tenant orgs
-- **User & admin dashboards**
-  - Project history, usage analytics, credit metering
+- Natural language → complete production-grade codebases  
+  (Next.js, FastAPI, PostgreSQL, Stripe, Auth, RBAC, and more)
+- Multi-agent architecture  
+  Architect → Frontend → Backend → Security/QA → DevOps
+- Grok-powered intelligent model routing  
+  - `grok-4-latest` — deep reasoning & architecture  
+  - `grok-4-1-fast-reasoning` — agent execution & tools  
+  - `grok-4-1-fast-non-reasoning` — high-throughput tasks
+- Real-time memory & RAG (pgvector + long-term project memory)
+- Automated testing & self-healing
+- One-click deployments (Vercel, Railway, Render, Fly.io, custom domains)
+- Built-in billing, usage metering & notifications (Stripe + Resend)
+- Enterprise-grade security (JWT, OAuth, 2FA/TOTP, RBAC, multi-tenant orgs)
+- User & admin dashboards (project history, usage analytics, credit metering)
 
 ---
 
 ## Technology Stack
 
-### Frontend — Next.js (App Router)
-- React 18, TypeScript
-- Tailwind CSS + shadcn/ui
-- NextAuth v5 / Auth.js (Credentials, Google, GitHub)
-- TanStack Query
-- Zod, react-hook-form, sonner
+**Frontend**  
+- Next.js 15 (App Router)  
+- React 19, TypeScript  
+- Tailwind CSS + shadcn/ui  
+- Auth.js v5 (Credentials, Google, GitHub)  
+- TanStack Query, Zod, react-hook-form, sonner
 
-### Backend — FastAPI
-- Python 3.12
-- SQLAlchemy 2.0 + asyncpg
-- Supabase PostgreSQL + pgvector
-- LangGraph + LangChain-xAI
-- Celery + Upstash Redis
-- Stripe, SendGrid
+**Backend**  
+- FastAPI (Python 3.12)  
+- SQLAlchemy 2.0 + asyncpg  
+- Supabase PostgreSQL + pgvector  
+- LangGraph + LangChain (xAI integration)  
+- Celery + Upstash Redis  
+- Stripe (subscriptions + metered usage)  
+- Resend (email delivery)
 
-### Infrastructure & DevOps
-- Docker & docker-compose
-- Supabase (Postgres)
-- Upstash (Redis)
-- GitHub Actions (CI/CD)
-- Sentry (monitoring)
+**Infrastructure & DevOps**  
+- Docker & docker-compose  
+- Supabase (Postgres + Auth)  
+- Upstash (Redis)  
+- GitHub Actions (CI/CD)  
+- Sentry (error monitoring)  
+- Prometheus + custom metrics
 
-### AI Layer
-- **xAI Grok family** with intelligent routing
+**AI Layer**  
+- xAI Grok family with intelligent routing
 
 ---
 
-## Quick Start — Local Development
+## Quick Start – Local Development
 
 ### Prerequisites
-- Node.js **20+** & pnpm **9+**
-- Python **3.12+**
-- Docker (optional)
-- Supabase account
-- Upstash account
-
----
+- Node.js 20+ & pnpm 9+
+- Python 3.12+
+- Docker (recommended)
+- Supabase account (free tier works)
+- Upstash Redis account (free tier works)
 
 ### 1. Clone & Install
 
@@ -103,6 +111,3 @@ CursorCode AI operates as a **self-directing AI engineering organization**, capa
 git clone https://github.com/your-org/cursorcode-ai.git
 cd cursorcode-ai
 pnpm install
-
-
-
