@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/your-org/cursorcode-ai/main/apps/web/public/logo.svg" alt="CursorCode AI Logo" width="180" />
+  <img src="https://raw.githubusercontent.com/your-org/cursorcode-ai/main/apps/web/public/logo.png" alt="CursorCode AI Logo" width="180" />
 </p>
 
 <h1 align="center">CursorCode AI</h1>
@@ -111,3 +111,4 @@ CursorCode AI behaves like a **self-directed AI engineering team** capable of de
 git clone https://github.com/your-org/cursorcode-ai.git
 cd cursorcode-ai
 pnpm install
+
