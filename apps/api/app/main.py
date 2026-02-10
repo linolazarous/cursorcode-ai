@@ -9,6 +9,7 @@ Custom monitoring: structured logging + Supabase error table + Prometheus /metri
 import logging
 import time
 import traceback
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -22,7 +23,7 @@ from sqlalchemy import insert
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
-from app.db.session import engine, init_db
+from app.db.session import engine, init_db, get_db
 from app.routers import (
     auth,
     orgs,
@@ -30,6 +31,7 @@ from app.routers import (
     billing,
     webhook,
     admin,
+    monitoring,           # ← Added monitoring router
 )
 from app.middleware.auth import auth_middleware           # Selective (Depends)
 from app.middleware.logging import log_requests_middleware
@@ -63,24 +65,26 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ─────────────────────────────────────
+    request_id = str(uuid.uuid4())
     logger.info(
         f"Starting CursorCode AI API v{settings.APP_VERSION} "
-        f"in {settings.ENVIRONMENT.upper()} mode"
+        f"in {settings.ENVIRONMENT.upper()} mode",
+        extra={"request_id": request_id}
     )
 
     try:
         await init_db()
         db_type = "Supabase" if "supabase" in str(settings.DATABASE_URL).lower() else "PostgreSQL"
-        logger.info(f"{db_type} connection verified")
+        logger.info(f"{db_type} connection verified", extra={"request_id": request_id})
     except Exception as exc:
-        logger.critical(f"Database connection failed on startup: {exc}")
+        logger.critical(f"Database connection failed on startup: {exc}", extra={"request_id": request_id})
         # Continue in production (alert via logs/Prometheus)
 
     yield
 
     # ── Shutdown ────────────────────────────────────
-    logger.info("CursorCode AI API shutting down...")
-    logger.info("Shutdown complete")
+    logger.info("CursorCode AI API shutting down...", extra={"request_id": request_id})
+    logger.info("Shutdown complete", extra={"request_id": request_id})
 
 
 # ────────────────────────────────────────────────
@@ -128,6 +132,10 @@ async def metrics_middleware(request: Request, call_next):
     path = request.url.path
     start_time = time.time()
 
+    # Add correlation ID
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+
     try:
         response = await call_next(request)
         status_code = response.status_code
@@ -156,6 +164,7 @@ app.include_router(projects.router, prefix="/projects", tags=["Projects"])
 app.include_router(billing.router, prefix="/billing", tags=["Billing"])
 app.include_router(webhook.router, prefix="/webhook", tags=["Webhooks"])
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])
+app.include_router(monitoring.router, prefix="/monitoring", tags=["Monitoring"])  # ← Added here
 
 # ────────────────────────────────────────────────
 # Prometheus Metrics Endpoint
@@ -176,14 +185,16 @@ async def custom_exception_handler(request: Request, exc: Exception):
     - Store error in Supabase 'app_errors' table
     - Return user-friendly 500 response
     """
+    request_id = getattr(request.state, "request_id", "unknown")
     user_id = getattr(request.state, "user_id", None)
     path = request.url.path
     method = request.method
 
-    # Structured log
+    # Structured log with correlation ID
     logger.exception(
         f"Unhandled exception: {exc}",
         extra={
+            "request_id": request_id,
             "path": path,
             "method": method,
             "user_id": user_id,
@@ -206,13 +217,15 @@ async def custom_exception_handler(request: Request, exc: Exception):
                     request_method=method,
                     environment=settings.ENVIRONMENT,
                     extra={
+                        "request_id": request_id,
                         "request_url": str(request.url),
+                        "traceback_lines": traceback.format_tb(exc.__traceback__),
                     },
                 )
             )
             await db.commit()
     except Exception as db_exc:
-        logger.error(f"Failed to log error to Supabase: {db_exc}")
+        logger.error(f"Failed to log error to Supabase: {db_exc}", extra={"request_id": request_id})
 
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -237,20 +250,3 @@ async def readiness_check():
 @app.get("/live", tags=["Health"])
 async def liveness_check():
     return {"status": "alive"}
-
-
-# ────────────────────────────────────────────────
-# Startup Logging (moved from deprecated @app.on_event)
-# ────────────────────────────────────────────────
-@app.on_startup
-async def startup_event():
-    db_host = "Supabase" if "supabase" in str(settings.DATABASE_URL).lower() else \
-              (settings.DATABASE_URL.host if hasattr(settings.DATABASE_URL, 'host') else 'unknown')
-
-    redis_host = settings.REDIS_URL.host if hasattr(settings.REDIS_URL, 'host') else 'unknown'
-
-    logger.info(
-        f"CursorCode AI API v{settings.APP_VERSION} "
-        f"started successfully in {settings.ENVIRONMENT.upper()} mode "
-        f"(DB: {db_host}, Redis: {redis_host})"
-    )
