@@ -7,6 +7,7 @@ Logs all significant user actions (login, signup, 2FA, billing, project creation
 
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -25,30 +26,35 @@ logger = logging.getLogger(__name__)
     name="app.tasks.logging.audit_log",
     bind=True,
     max_retries=5,
-    default_retry_delay=30,  # seconds
+    default_retry_delay=30,       # seconds
     retry_backoff=True,
     retry_jitter=True,
     acks_late=True,
 )
 async def audit_log_task(
     self,
-    user_id: Optional[str],
+    user_id: Optional[str] = None,
     action: str,
     metadata: Optional[Dict[str, Any]] = None,
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
     request_id: Optional[str] = None,
+    event_id: Optional[str] = None,  # for deduplication / tracing
 ):
     """
-    Celery async task: Create audit log entry.
-    Retries on DB failure, ensures immutability.
+    Celery async task: Create immutable audit log entry.
+    Retries on DB failure, ensures delivery.
     """
+    if event_id is None:
+        event_id = str(uuid.uuid4())
+
     try:
         async with async_session_factory() as db:
             stmt = insert(AuditLog).values(
+                event_id=event_id,
                 user_id=user_id,
                 action=action,
-                event_metadata=metadata or {},  # renamed field
+                event_metadata=metadata or {},
                 ip_address=ip_address,
                 user_agent=user_agent,
                 request_id=request_id,
@@ -58,27 +64,44 @@ async def audit_log_task(
             await db.commit()
 
         logger.info(
-            f"AUDIT: {action} | user={user_id} | "
-            f"meta={json.dumps(metadata or {}, default=str)}"
+            f"AUDIT [{event_id}]: {action}",
+            extra={
+                "user_id": user_id,
+                "metadata": json.dumps(metadata or {}, default=str),
+                "ip": ip_address,
+                "user_agent": user_agent,
+                "request_id": request_id,
+            }
         )
 
     except Exception as exc:
-        logger.exception(f"Audit log failed for action '{action}'")
+        logger.exception(
+            f"Audit log failed for action '{action}' (event_id={event_id})",
+            extra={"exc_info": str(exc)}
+        )
         raise self.retry(exc=exc)
 
 
 # ────────────────────────────────────────────────
-# Sync wrapper (for middleware/routes - queues Celery task)
+# Public sync wrapper (queues Celery task)
 # ────────────────────────────────────────────────
 def audit_log(
-    user_id: Optional[str],
+    user_id: Optional[str] = None,
     action: str,
     metadata: Optional[Dict[str, Any]] = None,
     request: Optional[Request] = None,
+    event_id: Optional[str] = None,
 ):
     """
     Convenience sync caller: queues the Celery audit task.
-    Use in middleware or sync routes.
+    Use in middleware, routes, or services.
+
+    Args:
+        user_id: Authenticated user ID (str)
+        action: Descriptive action name (e.g. "login_success", "project_created")
+        metadata: Optional dict of context (will be JSON-serialized)
+        request: FastAPI Request (for IP, user-agent, request ID)
+        event_id: Optional external trace ID (for correlation)
     """
     ip = request.client.host if request else None
     ua = request.headers.get("user-agent") if request else None
@@ -91,14 +114,39 @@ def audit_log(
         ip_address=ip,
         user_agent=ua,
         request_id=req_id,
+        event_id=event_id,
     )
 
 
 # ────────────────────────────────────────────────
-# Example usage in routes/middleware
+# Example usage patterns
 # ────────────────────────────────────────────────
-# In auth.py login endpoint:
-# audit_log(user.id, "login_success", {"method": "password+2fa"}, request=request)
+"""
+# In login endpoint (auth.py):
+audit_log(
+    user_id=user.id,
+    action="login_success",
+    metadata={"method": "password+2fa", "ip": request.client.host},
+    request=request
+)
+
+# In project creation (projects.py):
+audit_log(
+    user_id=current_user.id,
+    action="project_created",
+    metadata={
+        "project_id": str(project.id),
+        "title": project.title,
+        "prompt_length": len(payload.prompt),
+    },
+    request=request
+)
 
 # In middleware (after auth):
-# audit_log(user.id, "api_access", {"path": request.url.path, "method": request.method})
+audit_log(
+    user_id=user.id,
+    action="api_access",
+    metadata={"path": request.url.path, "method": request.method},
+    request=request
+)
+"""
