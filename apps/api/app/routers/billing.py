@@ -7,8 +7,7 @@ All endpoints require authentication.
 
 import logging
 from datetime import datetime
-from zoneinfo import ZoneInfo
-from typing import Annotated, Dict
+from typing import Annotated, Dict, Literal
 
 from fastapi import (
     APIRouter,
@@ -16,11 +15,15 @@ from fastapi import (
     HTTPException,
     status,
     Request,
+    Body,
 )
+from fastapi.security import HTTPBearer
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from slowapi import Limiter
 
 import stripe
-from stripe.error import StripeError
+from stripe.error import StripeError, InvalidRequestError
 
 from app.core.config import settings
 from app.db.session import get_db
@@ -32,64 +35,114 @@ from app.services.billing import (
     report_usage,
 )
 from app.services.logging import audit_log
-from app.tasks.email import send_email_task
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
-# Rate limiter (protect against abuse)
-limiter = Limiter(key_func=lambda r: r.client.host)
+security = HTTPBearer(auto_error=False)
+
+# Rate limiter: per authenticated user
+def billing_limiter_key(request: Request) -> str:
+    user = getattr(request.state, "user", None)
+    if user and hasattr(user, "id"):
+        return str(user.id)
+    return request.client.host  # fallback
+
+limiter = Limiter(key_func=billing_limiter_key)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY.get_secret_value()
 
 
 # ────────────────────────────────────────────────
+# Models
+# ────────────────────────────────────────────────
+class Plan(str, Enum):
+    starter = "starter"
+    standard = "standard"
+    pro = "pro"
+    premier = "premier"
+    ultra = "ultra"
+
+
+class CreateCheckoutSessionRequest(BaseModel):
+    plan: Plan = Field(...)
+    success_url: str = Field(default_factory=lambda: f"{settings.FRONTEND_URL}/billing/success")
+    cancel_url: str = Field(default_factory=lambda: f"{settings.FRONTEND_URL}/billing")
+
+
+class BillingPortalRequest(BaseModel):
+    return_url: str = Field(default_factory=lambda: f"{settings.FRONTEND_URL}/billing")
+
+
+class UsageReportRequest(BaseModel):
+    tokens_used: int = Field(..., ge=0)
+    model: str = Field(..., min_length=1)
+
+
+class BillingStatusResponse(BaseModel):
+    plan: str
+    credits: int
+    subscription_status: Optional[str]
+    stripe_customer_id: Optional[str]
+    stripe_subscription_id: Optional[str]
+
+
+# ────────────────────────────────────────────────
 # Create Checkout Session (subscribe / upgrade plan)
 # ────────────────────────────────────────────────
-@router.post("/create-checkout-session")
-@limiter.limit("5/minute")  # Prevent abuse
+@router.post("/create-checkout-session", response_model=Dict[str, str])
+@limiter.limit("5/minute")
 async def create_billing_session(
     request: Request,
-    plan: str = "pro",  # starter, standard, pro, premier, ultra
-    success_url: str = f"{settings.FRONTEND_URL}/billing/success",
-    cancel_url: str = f"{settings.FRONTEND_URL}/billing",
+    payload: CreateCheckoutSessionRequest,
     current_user: Annotated[AuthUser, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Generate Stripe Checkout session for subscription/upgrade.
-    Returns session URL to redirect user to.
+    Generate Stripe Checkout session for subscription or plan upgrade.
+    Returns session URL to redirect the user.
     """
-    valid_plans = ["starter", "standard", "pro", "premier", "ultra"]
-    if plan not in valid_plans:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid plan. Valid options: {', '.join(valid_plans)}")
-
     try:
         user = await db.get(User, current_user.id)
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
 
+        # Get or create Stripe customer
+        customer_id = await create_or_get_stripe_customer(user, db)
+
+        # Create checkout session with idempotency
+        idempotency_key = f"checkout_{current_user.id}_{payload.plan}_{datetime.utcnow().timestamp()}"
+
         session = await create_checkout_session(
             user=user,
-            plan=plan,
-            success_url=success_url,
-            cancel_url=cancel_url,
+            plan=payload.plan,
+            success_url=payload.success_url,
+            cancel_url=payload.cancel_url,
             db=db,
+            idempotency_key=idempotency_key,
         )
 
         audit_log.delay(
             user_id=current_user.id,
             action="billing_checkout_created",
-            metadata={"plan": plan, "session_id": session["session_id"]},
+            metadata={
+                "plan": payload.plan,
+                "session_id": session["session_id"],
+                "customer_id": customer_id,
+                "ip": request.client.host,
+            },
             request=request,
         )
 
-        return session
+        return {"url": session["url"]}
 
     except StripeError as e:
-        logger.error(f"Stripe error: {e}")
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e.user_message or "Payment service error"))
+        logger.error(f"Stripe error during checkout: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Payment setup failed. Please try again or contact support."
+        )
     except Exception as e:
         logger.exception("Checkout session creation failed")
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Internal error")
@@ -98,31 +151,35 @@ async def create_billing_session(
 # ────────────────────────────────────────────────
 # Customer Portal (manage subscriptions, payment methods)
 # ────────────────────────────────────────────────
-@router.post("/portal")
+@router.post("/portal", response_model=Dict[str, str])
 @limiter.limit("5/minute")
 async def create_billing_portal(
     request: Request,
-    return_url: str = f"{settings.FRONTEND_URL}/billing",
+    payload: BillingPortalRequest,
     current_user: Annotated[AuthUser, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Create Stripe Customer Portal session (manage billing, invoices, etc.).
+    Create Stripe Customer Portal session for managing billing.
     """
     try:
         user = await db.get(User, current_user.id)
         if not user or not user.stripe_customer_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "No Stripe customer found")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No Stripe customer found. Create a subscription first."
+            )
 
         session = stripe.billing_portal.Session.create(
             customer=user.stripe_customer_id,
-            return_url=return_url,
+            return_url=payload.return_url,
+            idempotency_key=f"portal_{current_user.id}_{datetime.utcnow().timestamp()}",
         )
 
         audit_log.delay(
             user_id=current_user.id,
             action="billing_portal_opened",
-            metadata={"session_id": session.id},
+            metadata={"session_id": session.id, "ip": request.client.host},
             request=request,
         )
 
@@ -139,59 +196,62 @@ async def create_billing_portal(
 # ────────────────────────────────────────────────
 # Get current plan & credits (for dashboard)
 # ────────────────────────────────────────────────
-@router.get("/status")
+@router.get("/status", response_model=BillingStatusResponse)
 async def get_billing_status(
     current_user: Annotated[AuthUser, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Returns user's current plan, credits, subscription status.
+    Returns user's current plan, credits, and subscription status.
     """
     user = await db.get(User, current_user.id)
     if not user:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
 
-    return {
-        "plan": user.plan,
-        "credits": user.credits,
-        "subscription_status": user.subscription_status,
-        "stripe_customer_id": user.stripe_customer_id,
-        "stripe_subscription_id": user.stripe_subscription_id,
-    }
+    return BillingStatusResponse(
+        plan=user.plan,
+        credits=user.credits,
+        subscription_status=user.subscription_status,
+        stripe_customer_id=user.stripe_customer_id,
+        stripe_subscription_id=user.stripe_subscription_id,
+    )
 
 
 # ────────────────────────────────────────────────
 # Report Grok usage (called from orchestrator after agent run)
 # ────────────────────────────────────────────────
 @router.post("/usage/report")
-@limiter.limit("10/minute")  # Protect against abuse
+@limiter.limit("20/minute")  # Higher limit for internal usage reporting
 async def report_grok_usage_endpoint(
     request: Request,
-    tokens_used: int = Body(..., embed=True),
-    model: str = Body(..., embed=True),
+    payload: UsageReportRequest = Body(...),
     current_user: Annotated[AuthUser, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
     """
     Reports Grok token usage to Stripe (metered billing).
-    Called internally by orchestration.
+    Called internally by orchestration after each agent step.
     """
     try:
         await report_usage(
             user_id=current_user.id,
-            tokens=tokens_used,
-            model=model,
+            tokens=payload.tokens_used,
+            model=payload.model,
             db=db,
         )
 
         audit_log.delay(
             user_id=current_user.id,
             action="grok_usage_reported",
-            metadata={"tokens": tokens_used, "model": model},
+            metadata={
+                "tokens": payload.tokens_used,
+                "model": payload.model,
+                "ip": request.client.host,
+            },
             request=request,
         )
 
-        return {"status": "reported", "tokens": tokens_used}
+        return {"status": "reported", "tokens": payload.tokens_used}
 
     except Exception as e:
         logger.exception("Failed to report usage")
@@ -199,7 +259,7 @@ async def report_grok_usage_endpoint(
 
 
 # ────────────────────────────────────────────────
-# Webhook confirmation test endpoint (for debugging)
+# Webhook confirmation test endpoint (admin-only debug)
 # ────────────────────────────────────────────────
 @router.get("/webhook/test")
 async def test_webhook_connection(
@@ -207,5 +267,10 @@ async def test_webhook_connection(
 ):
     """
     Simple endpoint to verify webhook URL is reachable from Stripe.
+    Admin-only for security.
     """
-    return {"status": "webhook endpoint reachable", "user": current_user.email}
+    return {
+        "status": "webhook endpoint reachable",
+        "user": current_user.email,
+        "timestamp": datetime.now(ZoneInfo("UTC")).isoformat()
+    }
