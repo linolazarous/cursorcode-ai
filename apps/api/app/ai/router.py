@@ -3,17 +3,15 @@
 Grok Model Router - CursorCode AI
 Intelligent multi-model routing across xAI Grok family (2026 standards).
 Optimizes for reasoning depth, speed, cost, and task type.
-Uses official langchain-groq integration.
+Uses raw httpx to xAI API (no langchain-groq dependency).
 """
 
 import logging
-from typing import Optional, List
-
-from langchain_groq import ChatGroq
-from langchain_core.tools import BaseTool
+from typing import Optional
 
 from app.core.config import settings
 from app.services.logging import audit_log
+from .llm import get_llm  # Raw httpx callable factory
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +24,6 @@ MODELS = {
     "fast_non_reasoning": settings.FAST_NON_REASONING_MODEL or "grok-beta-fast",
 }
 
-# Fallback if env vars are missing
 DEFAULT_FALLBACK_MODEL = "grok-beta"
 
 # ────────────────────────────────────────────────
@@ -46,6 +43,7 @@ AGENT_MODEL_PREFERENCE = {
     "qa": "fast_non_reasoning",
     "devops": "fast_non_reasoning",
 }
+
 
 # ────────────────────────────────────────────────
 # Core Routing Logic
@@ -67,7 +65,6 @@ def get_model_for_agent(
     if user_tier in ["premier", "ultra"] and task_complexity in ["medium", "high"]:
         preferred = "default_reasoning"
     else:
-        # Default mapping
         preferred = AGENT_MODEL_PREFERENCE.get(agent_type, "fast_non_reasoning")
 
     # Complexity override
@@ -112,26 +109,34 @@ def get_routed_llm(
     task_complexity: str = "medium",
     temperature: float = 0.3,             # Lower for precision
     max_tokens: int = 8192,
-    tools: Optional[List[BaseTool]] = None,
-) -> ChatGroq:
+    tools: Optional[List] = None,
+):
     """
-    Returns configured ChatGroq instance with correct model.
-    Uses official langchain-groq package.
+    Returns raw async callable for the routed Grok model (from llm.py).
+    Use for non-streaming calls: await llm(messages)
     """
     model_name = get_model_for_agent(agent_type, user_tier, task_complexity)
 
-    llm = ChatGroq(
-        model=model_name,
-        groq_api_key=settings.XAI_API_KEY.get_secret_value(),
-        base_url="https://api.x.ai/v1",
+    # Dynamic parameters (same as before)
+    if agent_type in ["architect", "security", "product"]:
+        temperature = 0.2
+        max_tokens = 12288
+    elif agent_type in ["frontend", "backend"]:
+        temperature = 0.5
+        max_tokens = 8192
+    else:
+        temperature = 0.7
+        max_tokens = 4096
+
+    # Get raw httpx callable
+    llm_callable = get_llm(
+        model_name=model_name,
         temperature=temperature,
         max_tokens=max_tokens,
+        tools=tools,
     )
 
-    if tools:
-        llm = llm.bind_tools(tools)
-
-    return llm
+    return llm_callable
 
 
 # ────────────────────────────────────────────────
