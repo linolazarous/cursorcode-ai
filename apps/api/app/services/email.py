@@ -3,12 +3,11 @@
 Resend Email Service - CursorCode AI
 Async, retryable email sending with Resend API.
 Handles: verification, password reset, low credits, deployment events, 2FA notifications.
-Production-ready (February 2026): audit logging, error handling.
+Production-ready (February 2026): audit logging, error handling, background queuing.
 """
 
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime
 
 import resend
 from fastapi import BackgroundTasks
@@ -19,10 +18,13 @@ from app.tasks.email import send_email_task  # Celery task for retries
 
 logger = logging.getLogger(__name__)
 
-# Initialize Resend client
+# Initialize Resend client once
 resend.api_key = settings.RESEND_API_KEY.get_secret_value()
 
 
+# ────────────────────────────────────────────────
+# Core async email sender (low-level)
+# ────────────────────────────────────────────────
 async def send_email(
     to: str,
     subject: str,
@@ -32,36 +34,48 @@ async def send_email(
     cc: Optional[List[str]] = None,
     bcc: Optional[List[str]] = None,
     reply_to: Optional[str] = None,
+    background_tasks: Optional[BackgroundTasks] = None,
 ) -> Dict[str, Any]:
     """
     Core async email sending function using Resend.
     Prioritizes HTML → plain text fallback.
+    Queues via Celery if background_tasks is None.
     """
+    payload = {
+        "from": from_email,
+        "to": [to],
+        "subject": subject,
+    }
+
+    if html:
+        payload["html"] = html
+    elif text:
+        payload["text"] = text
+    else:
+        raise ValueError("Either html or text content is required")
+
+    if cc:
+        payload["cc"] = cc
+    if bcc:
+        payload["bcc"] = bcc
+    if reply_to:
+        payload["reply_to"] = reply_to
+
+    # Queue via Celery (recommended for production)
+    if background_tasks is None:
+        task_kwargs = payload.copy()
+        task_kwargs["to"] = to  # Celery task expects single string
+        send_email_task.delay(**task_kwargs)
+        return {"status": "queued"}
+
+    # Direct async send (for critical sync flows)
     try:
-        payload = {
-            "from": from_email,
-            "to": [to],
-            "subject": subject,
-        }
-
-        if html:
-            payload["html"] = html
-        elif text:
-            payload["text"] = text
-        else:
-            raise ValueError("Either html or text content is required")
-
-        if cc:
-            payload["cc"] = cc
-        if bcc:
-            payload["bcc"] = bcc
-        if reply_to:
-            payload["reply_to"] = reply_to
-
-        # Send via Resend (sync call — wrap in asyncio.to_thread if needed)
         response = await asyncio.to_thread(resend.Emails.send, payload)
 
-        logger.info(f"Email sent to {to}: {subject} (id: {response.get('id')})")
+        logger.info(
+            f"Email sent to {to}: {subject}",
+            extra={"message_id": response.get("id"), "provider": "resend"}
+        )
 
         audit_log.delay(
             user_id=None,
@@ -69,6 +83,7 @@ async def send_email(
             metadata={
                 "to": to,
                 "subject": subject,
+                "message_id": response.get("id"),
                 "status": "success",
                 "provider": "resend",
             },
@@ -79,18 +94,26 @@ async def send_email(
             "message_id": response.get("id"),
         }
 
-    except Exception as exc:
-        logger.exception(f"Failed to send email to {to}: {subject}")
+    except resend.ResendError as e:
+        logger.error(f"Resend API error: {e}")
         audit_log.delay(
             user_id=None,
             action="email_failed",
-            metadata={"to": to, "subject": subject, "error": str(exc)},
+            metadata={"to": to, "subject": subject, "error": str(e)},
+        )
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Email service unavailable")
+    except Exception as e:
+        logger.exception(f"Unexpected email send failure to {to}")
+        audit_log.delay(
+            user_id=None,
+            action="email_failed",
+            metadata={"to": to, "subject": subject, "error": str(e)},
         )
         raise
 
 
 # ────────────────────────────────────────────────
-# Convenience Wrappers (queue via Celery or background_tasks)
+# Convenience wrappers (queue via BackgroundTasks or Celery)
 # ────────────────────────────────────────────────
 
 def send_verification_email(
@@ -101,7 +124,7 @@ def send_verification_email(
     html = f"""
     <h2>Welcome to CursorCode AI!</h2>
     <p>Please verify your email by clicking the link below:</p>
-    <p><a href="{verification_url}">Verify Email Address</a></p>
+    <p><a href="{verification_url}" style="padding: 10px 20px; background: #0066cc; color: white; text-decoration: none; border-radius: 5px;">Verify Email Address</a></p>
     <p>This link expires in 24 hours.</p>
     <p>If you didn't create this account, ignore this email.</p>
     <br>
@@ -113,6 +136,7 @@ def send_verification_email(
         "subject": "Verify Your CursorCode AI Account",
         "html": html,
     }
+
     if background_tasks:
         background_tasks.add_task(send_email_task.delay, **task_kwargs)
     else:
@@ -127,7 +151,7 @@ def send_password_reset_email(
     html = f"""
     <h2>Password Reset Request</h2>
     <p>Click the link below to reset your password:</p>
-    <p><a href="{reset_url}">Reset Password</a></p>
+    <p><a href="{reset_url}" style="padding: 10px 20px; background: #0066cc; color: white; text-decoration: none; border-radius: 5px;">Reset Password</a></p>
     <p>This link expires in 1 hour.</p>
     <p>If you didn't request this, ignore this email.</p>
     <br>
@@ -139,6 +163,7 @@ def send_password_reset_email(
         "subject": "Reset Your CursorCode AI Password",
         "html": html,
     }
+
     if background_tasks:
         background_tasks.add_task(send_email_task.delay, **task_kwargs)
     else:
@@ -153,8 +178,8 @@ def send_low_credits_alert(
     html = f"""
     <h2>Low Credits Alert</h2>
     <p>You have only <strong>{remaining}</strong> credits remaining.</p>
-    <p>Upgrade your plan to continue using CursorCode AI without interruption.</p>
-    <p><a href="{settings.FRONTEND_URL}/billing">Upgrade Now</a></p>
+    <p>Top up soon to continue using CursorCode AI without interruption.</p>
+    <p><a href="{settings.FRONTEND_URL}/billing" style="padding: 10px 20px; background: #0066cc; color: white; text-decoration: none; border-radius: 5px;">Add Credits</a></p>
     <br>
     <p>Best regards,<br>CursorCode AI Team</p>
     """
@@ -164,6 +189,7 @@ def send_low_credits_alert(
         "subject": "Low Credits Alert - CursorCode AI",
         "html": html,
     }
+
     if background_tasks:
         background_tasks.add_task(send_email_task.delay, **task_kwargs)
     else:
@@ -180,8 +206,8 @@ def send_deployment_success_email(
     html = f"""
     <h2>Project Deployed Successfully!</h2>
     <p>Your project <strong>{project_title}</strong> is now live.</p>
-    <p><a href="{deploy_url}">View Deployed Project</a></p>
-    {f"<p><a href='{preview_url}'>Live Preview</a></p>" if preview_url else ""}
+    <p><a href="{deploy_url}" style="padding: 10px 20px; background: #0066cc; color: white; text-decoration: none; border-radius: 5px;">View Deployed Project</a></p>
+    {f"<p><a href='{preview_url}' style='padding: 10px 20px; background: #4caf50; color: white; text-decoration: none; border-radius: 5px;'>Live Preview</a></p>" if preview_url else ""}
     <br>
     <p>Best regards,<br>CursorCode AI Team</p>
     """
@@ -191,6 +217,7 @@ def send_deployment_success_email(
         "subject": f"Project Deployed Successfully: {project_title}",
         "html": html,
     }
+
     if background_tasks:
         background_tasks.add_task(send_email_task.delay, **task_kwargs)
     else:
@@ -205,7 +232,7 @@ def send_2fa_enabled_email(
     <h2>Two-Factor Authentication Enabled</h2>
     <p>2FA has been successfully enabled on your account.</p>
     <p>Your account is now more secure.</p>
-    <p>If this wasn't you, contact support immediately.</p>
+    <p>If this was not you, contact support immediately.</p>
     <br>
     <p>Best regards,<br>CursorCode AI Team</p>
     """
@@ -215,6 +242,7 @@ def send_2fa_enabled_email(
         "subject": "Two-Factor Authentication Enabled on Your Account",
         "html": html,
     }
+
     if background_tasks:
         background_tasks.add_task(send_email_task.delay, **task_kwargs)
     else:
@@ -238,6 +266,7 @@ def send_2fa_disabled_email(
         "subject": "Two-Factor Authentication Disabled on Your Account",
         "html": html,
     }
+
     if background_tasks:
         background_tasks.add_task(send_email_task.delay, **task_kwargs)
     else:
@@ -265,6 +294,7 @@ def send_2fa_login_alert(
         "subject": "New Login Detected with 2FA",
         "html": html,
     }
+
     if background_tasks:
         background_tasks.add_task(send_email_task.delay, **task_kwargs)
     else:
