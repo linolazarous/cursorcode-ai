@@ -7,29 +7,29 @@ Auto-created prices are cached here for idempotency and fast lookup.
 
 from datetime import datetime
 from typing import Optional
-from uuid import uuid4
 
 from sqlalchemy import Boolean, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base
+from app.db.base import Base, TimestampMixin
 
 
-class Plan(Base):
+class Plan(Base, TimestampMixin):
     """
     Billing Plan Entity
     - Defines available subscription tiers (starter, pro, ultra, etc.)
     - Stores auto-generated Stripe Product & Price IDs
     - Used for dynamic checkout session creation
-    - Supports future features like credit allowances, features list
+    - Supports future features like credit allowances, feature lists
     """
 
     __tablename__ = "plans"
-
     __table_args__ = (
         Index("ix_plans_name", "name", unique=True),
-        {'extend_existing': True},  # Safeguard against duplicate table registration
+        Index("ix_plans_stripe_price_id", "stripe_price_id"),
+        Index("ix_plans_deleted_at", "deleted_at"),
+        {'extend_existing': True},
     )
 
     id: Mapped[str] = mapped_column(
@@ -40,13 +40,13 @@ class Plan(Base):
         index=True,
     )
 
-    # Plan identifier (used in code & URLs)
+    # Plan identifier (used in code, URLs, metadata)
     name: Mapped[str] = mapped_column(
         String(50),
         unique=True,
         nullable=False,
         index=True,
-        comment="Internal plan key (e.g. 'starter', 'pro', 'ultra')"
+        comment="Internal unique key (e.g. 'starter', 'pro', 'ultra')"
     )
 
     # Display name for UI/emails
@@ -56,14 +56,14 @@ class Plan(Base):
         comment="Human-readable name (e.g. 'Starter Plan', 'Pro Plan')"
     )
 
-    # Pricing in USD cents (e.g. 999 = $9.99)
+    # Pricing (in USD cents)
     price_usd_cents: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
-        comment="Price in USD cents (smallest unit)"
+        comment="Price in USD cents (e.g. 999 = $9.99)"
     )
 
-    # Recurring interval
+    # Billing cycle
     interval: Mapped[str] = mapped_column(
         String(20),
         default="month",
@@ -75,15 +75,17 @@ class Plan(Base):
     stripe_product_id: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
+        unique=True,
         comment="Stripe Product ID"
     )
     stripe_price_id: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
-        comment="Stripe Price ID for recurring billing"
+        unique=True,
+        comment="Stripe recurring Price ID"
     )
 
-    # Plan status
+    # Plan status & visibility
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
@@ -91,29 +93,30 @@ class Plan(Base):
         comment="Whether this plan is available for new signups"
     )
 
-    # Optional: monthly credit allowance for this plan
-    monthly_credits: Mapped[Optional[int]] = mapped_column(
-        Integer,
-        nullable=True,
-        comment="Monthly credits included (null = unlimited or custom)"
-    )
+    # Optional future fields (uncomment when implemented)
+    # monthly_credits: Mapped[Optional[int]] = mapped_column(
+    #     Integer, nullable=True, comment="Monthly credits included"
+    # )
+    # features: Mapped[Optional[List[str]]] = mapped_column(
+    #     JSON, nullable=True, comment="Feature list (e.g. ['priority support', 'custom domain'])"
+    # )
+    # max_projects: Mapped[Optional[int]] = mapped_column(
+    #     Integer, nullable=True, comment="Max concurrent projects"
+    # )
 
-    # Timestamps
-    created_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(),
-        nullable=False,
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
+    # Lifecycle
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(nullable=True, index=True)
 
     def __repr__(self) -> str:
-        price = self.price_usd_cents / 100 if self.price_usd_cents else 0
-        return f"<Plan(name={self.name}, display={self.display_name}, price=${price:.2f}/{self.interval})>"
+        price = f"${self.price_usd:.2f}" if self.price_usd_cents else "$0.00"
+        return f"<Plan(name={self.name}, display={self.display_name}, price={price}/{self.interval})>"
 
     @property
     def price_usd(self) -> float:
         """Human-readable price in USD (float)."""
-        return self.price_usd_cents / 100 if self.price_usd_cents else 0.0
+        return self.price_usd_cents / 100.0 if self.price_usd_cents is not None else 0.0
+
+    @property
+    def is_free(self) -> bool:
+        """Quick check if this is the free tier."""
+        return self.price_usd_cents == 0
