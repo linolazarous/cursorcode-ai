@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/your-org/cursorcode-ai/main/apps/web/public/logo.png" alt="CursorCode AI Logo" width="180" />
+  <img 
+    src="https://raw.githubusercontent.com/linolazarous/cursorcode-ai/main/apps/web/public/logo.png" 
+    alt="CursorCode AI Logo" 
+    width="180" 
+  />
 </p>
 
 <h1 align="center">CursorCode AI</h1>
@@ -10,19 +14,19 @@
 
 <p align="center">
   <a href="https://cursorcode.ai">🌐 Live Demo</a> ·
-  <a href="https://github.com/your-org/cursorcode-ai/issues/new">🐛 Report Bug</a> ·
+  <a href="https://github.com/linolazarous/cursorcode-ai/issues/new">🐛 Report Bug</a> ·
   <a href="mailto:info@cursorcode.ai">📧 Contact</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/your-org/cursorcode-ai/stargazers">
-    <img src="https://img.shields.io/github/stars/your-org/cursorcode-ai?style=social" alt="GitHub stars" />
+  <a href="https://github.com/linolazarous/cursorcode-ai/stargazers">
+    <img src="https://img.shields.io/github/stars/linolazarous/cursorcode-ai?style=social" alt="GitHub stars" />
   </a>
-  <a href="https://github.com/your-org/cursorcode-ai/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/your-org/cursorcode-ai" alt="License" />
+  <a href="https://github.com/linolazarous/cursorcode-ai/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/linolazarous/cursorcode-ai" alt="License" />
   </a>
-  <a href="https://github.com/your-org/cursorcode-ai/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/your-org/cursorcode-ai/ci.yml?branch=main" alt="CI Status" />
+  <a href="https://github.com/linolazarous/cursorcode-ai/actions">
+    <img src="https://img.shields.io/github/actions/workflow/status/linolazarous/cursorcode-ai/ci.yml?branch=main" alt="CI Status" />
   </a>
 </p>
 
@@ -108,7 +112,6 @@ CursorCode AI behaves like a **self-directed AI engineering team** capable of de
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/your-org/cursorcode-ai.git
+git clone https://github.com/linolazarous/cursorcode-ai.git
 cd cursorcode-ai
 pnpm install
-
