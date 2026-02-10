@@ -3,33 +3,27 @@
 AuditLog model for CursorCode AI
 Immutable audit trail for compliance, security, and debugging.
 Records all significant actions (auth, billing, admin ops, project events, etc.).
+Uses mixins from db/models/mixins.py for reusable patterns.
 """
 
 from datetime import datetime
 from typing import Dict, Optional
-from uuid import uuid4
 
-from sqlalchemy import (
-    String,
-    Text,
-    JSONB,  # ← Use JSONB for faster queries/indexing
-    ForeignKey,
-    Index,
-    func,
-)
+from sqlalchemy import String, Text, JSONB, func, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base
+from app.db.base import Base, TimestampMixin
+from app.db.models.mixins import UUIDMixin, SoftDeleteMixin, AuditMixin
 
 
-class AuditLog(Base):
+class AuditLog(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
     """
     Audit Log Entry
     - Immutable record of user/system actions
     - Captures who, what, when, where, how
     - Supports filtering by user, action, time, IP
-    - JSONB metadata for flexible context
+    - JSONB metadata for flexible, queryable context
     """
 
     __tablename__ = "audit_logs"
@@ -37,25 +31,7 @@ class AuditLog(Base):
         Index("ix_audit_user_id_action", "user_id", "action"),
         Index("ix_audit_created_at", "created_at"),
         Index("ix_audit_ip_address", "ip_address"),
-        Index("ix_audit_deleted_at", "deleted_at"),
         {'extend_existing': True},
-    )
-
-    id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid4,
-        server_default=func.gen_random_uuid(),
-        index=True,
-    )
-
-    # Who performed the action (null = system/anonymous)
-    user_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-        comment="ID of the user (or null for system events)"
     )
 
     # What happened
@@ -103,24 +79,8 @@ class AuditLog(Base):
         comment="Correlation ID (X-Request-ID) for tracing"
     )
 
-    # Timestamps & Soft Delete
-    created_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(),
-        nullable=False,
-        index=True,
-        comment="When the action occurred (UTC)"
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-        comment="Last update timestamp (rarely used)"
-    )
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(
-        nullable=True,
-        index=True,
-        comment="Soft-delete timestamp (null = active)"
-    )
+    # Timestamps & Soft Delete (from TimestampMixin + SoftDeleteMixin)
+    # created_at, updated_at, deleted_at already inherited
 
     def __repr__(self) -> str:
         fields = [f"id={self.id}", f"action={self.action!r}"]
