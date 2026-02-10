@@ -1,8 +1,9 @@
 # apps/api/app/ai/tools.py
 """
-LangChain Tools for CursorCode AI Agents
+Tools for CursorCode AI Agents
 Production-ready (February 2026): async, secure, auditable, agent-specific.
-Tools are bound per agent type to reduce token usage & attack surface.
+No LangChain dependency — plain async functions.
+Tools are called manually after LLM response parsing.
 """
 
 import logging
@@ -11,8 +12,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import httpx
-from langchain_core.tools import tool
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 
 from app.services.logging import audit_log
 from app.core.config import settings
@@ -72,14 +72,11 @@ async def log_tool_usage(tool_name: str, args: Dict, result: Any, user_id: Optio
 
 
 # ────────────────────────────────────────────────
-# Core Tools (used across agents)
+# Core Tools (async functions — called manually)
 # ────────────────────────────────────────────────
-@tool
-async def search_latest_stack_trends(
-    technology: str = Field(..., description="Tech stack or library (e.g. 'Next.js', 'FastAPI', 'PostgreSQL')")
-) -> Dict:
+async def search_latest_stack_trends(technology: str) -> Dict:
     """
-    Search for latest versions, trends, best practices, and security notes for a given technology.
+    Search for latest versions, trends, best practices, and security notes.
     Used primarily by Architect and Backend agents.
     """
     # In production: call real search API (e.g. Serper, Tavily, or xAI search)
@@ -113,11 +110,7 @@ async def search_latest_stack_trends(
     return result
 
 
-@tool
-async def execute_code_snippet(
-    code: str = Field(..., description="Code snippet to execute"),
-    language: Literal["python", "javascript", "typescript", "go"] = "python"
-) -> Dict:
+async def execute_code_snippet(code: str, language: Literal["python", "javascript", "typescript", "go"] = "python") -> Dict:
     """
     Safely execute small code snippets in sandboxed environment.
     Used by QA agent for test validation and Backend for logic checks.
@@ -136,9 +129,8 @@ async def execute_code_snippet(
         return {"output": "", "error": str(e), "success": False}
 
 
-@tool
 async def fetch_ui_component_example(
-    component_name: str = Field(..., description="Component name, e.g. 'Button', 'Modal', 'DataTable'"),
+    component_name: str,
     framework: Literal["react", "nextjs", "svelte", "vue"] = "nextjs"
 ) -> Dict:
     """
@@ -197,9 +189,8 @@ export function ExampleModal() {
     return result
 
 
-@tool
 async def scan_code_for_vulnerabilities(
-    code: str = Field(..., description="Code snippet or file content to scan"),
+    code: str,
     language: Literal["python", "javascript", "typescript", "go"] = "python"
 ) -> Dict:
     """
@@ -219,7 +210,6 @@ async def scan_code_for_vulnerabilities(
             "fix": "Use environment variables or secrets manager (e.g. AWS Secrets Manager, HashiCorp Vault)"
         })
 
-    # Add more patterns as needed (SQL injection, XSS, etc.)
     result = {
         "issues": issues,
         "score": max(0, 10 - len(issues) * 2),
@@ -231,9 +221,8 @@ async def scan_code_for_vulnerabilities(
     return result
 
 
-@tool
 async def generate_ci_cd_pipeline(
-    stack: str = Field(..., description="Tech stack summary, e.g. 'Next.js + FastAPI + Postgres'"),
+    stack: str,
     target: Literal["vercel", "railway", "flyio", "aws", "k8s"] = "vercel"
 ) -> Dict:
     """
@@ -274,7 +263,7 @@ jobs:
 
 
 # ────────────────────────────────────────────────
-# Tool Collections (bind per agent type to reduce context & tokens)
+# Tool Collections (per agent type — pass to LLM as needed)
 # ────────────────────────────────────────────────
 architect_tools = [search_latest_stack_trends]
 frontend_tools = [fetch_ui_component_example]
@@ -283,7 +272,7 @@ security_tools = [scan_code_for_vulnerabilities]
 qa_tools = [execute_code_snippet]
 devops_tools = [generate_ci_cd_pipeline]
 
-# All tools (for fallback or testing)
+# All tools (for fallback or full access)
 tools = [
     search_latest_stack_trends,
     execute_code_snippet,
