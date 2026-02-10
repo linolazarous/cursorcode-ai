@@ -1,12 +1,13 @@
 # apps/api/app/main.py
 """
 CursorCode AI FastAPI Application Entry Point
-Production-ready (February 2026): middleware, lifespan, observability, routers, security.
+Production-ready (February 2026): middleware, lifespan, observability, security.
 Supabase-ready: external managed Postgres, no auto-migrations, no engine dispose.
-Custom monitoring: structured logging + Supabase error table (no Sentry).
+Custom monitoring: structured logging + Supabase error table + Prometheus /metrics.
 """
 
 import logging
+import time
 import traceback
 from contextlib import asynccontextmanager
 from typing import Any
@@ -21,7 +22,7 @@ from sqlalchemy import insert
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
-from app.db.session import engine, init_db, get_db   # get_db for error logging
+from app.db.session import engine, init_db
 from app.routers import (
     auth,
     orgs,
@@ -33,7 +34,11 @@ from app.routers import (
 from app.middleware.auth import auth_middleware           # Selective (Depends)
 from app.middleware.logging import log_requests_middleware
 from app.middleware.security import add_security_headers
-from app.middleware.rate_limit import limiter, rate_limit_exceeded_handler, RateLimitMiddleware
+from app.middleware.rate_limit import limiter, RateLimitMiddleware
+
+# Prometheus metrics (custom monitoring)
+from app.monitoring.metrics import registry, http_requests_total, http_request_duration_seconds
+from prometheus_client import generate_latest
 
 # ────────────────────────────────────────────────
 # Structured Logging Setup
@@ -50,7 +55,7 @@ logger = logging.getLogger(__name__)
 # Global Rate Limiter (Redis-backed)
 # ────────────────────────────────────────────────
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ────────────────────────────────────────────────
 # Lifespan (startup & shutdown) – Supabase-friendly
@@ -64,24 +69,17 @@ async def lifespan(app: FastAPI):
     )
 
     try:
-        # Only test connection to Supabase Postgres (no migrations here)
         await init_db()
         db_type = "Supabase" if "supabase" in str(settings.DATABASE_URL).lower() else "PostgreSQL"
         logger.info(f"{db_type} connection verified")
     except Exception as exc:
         logger.critical(f"Database connection failed on startup: {exc}")
-        # Production policy: continue with alert (don't crash on DB issue)
-        # raise exc  # uncomment only if you want hard fail
-
-    # Optional: warm Redis, check Stripe/SendGrid, etc.
-    # await redis_client.ping()
+        # Continue in production (alert via logs/Prometheus)
 
     yield
 
     # ── Shutdown ────────────────────────────────────
     logger.info("CursorCode AI API shutting down...")
-    # Supabase pooling is external — no need to dispose engine
-    # await engine.dispose()  # commented out – avoids warnings in hosted envs
     logger.info("Shutdown complete")
 
 
@@ -104,6 +102,7 @@ app = FastAPI(
         {"name": "Webhooks", "description": "Stripe & external events"},
         {"name": "Admin", "description": "Platform administration (protected)"},
         {"name": "Health", "description": "Health & readiness checks"},
+        {"name": "Monitoring", "description": "Metrics & logging"},
     ],
 )
 
@@ -122,8 +121,25 @@ app.add_middleware(
 # 2. Security Headers (CSP, HSTS, etc.)
 app.add_middleware(BaseHTTPMiddleware, dispatch=add_security_headers)
 
-# 3. Structured Request Logging
-app.add_middleware(BaseHTTPMiddleware, dispatch=log_requests_middleware)
+# 3. Structured Request Logging + Prometheus instrumentation
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    method = request.method
+    path = request.url.path
+    start_time = time.time()
+
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+    except Exception:
+        status_code = 500
+        raise
+    finally:
+        duration = time.time() - start_time
+        http_requests_total.labels(method=method, path=path, status=status_code).inc()
+        http_request_duration_seconds.labels(method=method, path=path).observe(duration)
+
+    return response
 
 # 4. Rate Limiting Middleware (Redis + user-aware keys)
 app.add_middleware(RateLimitMiddleware)
@@ -132,7 +148,7 @@ app.add_middleware(RateLimitMiddleware)
 # Do NOT add app.middleware('http')(auth_middleware) here
 
 # ────────────────────────────────────────────────
-# Routers (all prefixed & tagged for OpenAPI)
+# Routers
 # ────────────────────────────────────────────────
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(orgs.router, prefix="/orgs", tags=["Organizations"])
@@ -142,21 +158,29 @@ app.include_router(webhook.router, prefix="/webhook", tags=["Webhooks"])
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 
 # ────────────────────────────────────────────────
-# Custom Global Exception Handler (replaces Sentry)
+# Prometheus Metrics Endpoint
+# ────────────────────────────────────────────────
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    return Response(generate_latest(registry), media_type="text/plain")
+
+
+# ────────────────────────────────────────────────
+# Custom Global Exception Handler (custom monitoring)
 # ────────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def custom_exception_handler(request: Request, exc: Exception):
     """
     Custom monitoring handler:
     - Structured logging with context
-    - Attempts to store error in Supabase table 'app_errors'
-    - Returns user-friendly 500 response
+    - Store error in Supabase 'app_errors' table
+    - Return user-friendly 500 response
     """
     user_id = getattr(request.state, "user_id", None)
     path = request.url.path
     method = request.method
 
-    # Structured log with context
+    # Structured log
     logger.exception(
         f"Unhandled exception: {exc}",
         extra={
@@ -169,7 +193,7 @@ async def custom_exception_handler(request: Request, exc: Exception):
         }
     )
 
-    # Try to log to Supabase table 'app_errors' (if table exists)
+    # Log to Supabase (async)
     try:
         async with get_db() as db:
             await db.execute(
@@ -182,7 +206,6 @@ async def custom_exception_handler(request: Request, exc: Exception):
                     request_method=method,
                     environment=settings.ENVIRONMENT,
                     extra={
-                        "traceback_lines": traceback.format_tb(exc.__traceback__),
                         "request_url": str(request.url),
                     },
                 )
@@ -198,7 +221,7 @@ async def custom_exception_handler(request: Request, exc: Exception):
 
 
 # ────────────────────────────────────────────────
-# Health / Readiness / Liveness (Render / Railway / K8s friendly)
+# Health / Readiness / Liveness
 # ────────────────────────────────────────────────
 @app.get("/health", tags=["Health"])
 async def health_check():
@@ -207,7 +230,7 @@ async def health_check():
 
 @app.get("/ready", tags=["Health"])
 async def readiness_check():
-    # Optional: add real checks (Supabase ping, Redis ping) if critical
+    # Optional: add real checks (DB ping, Redis ping)
     return {"status": "ready"}
 
 
@@ -217,9 +240,9 @@ async def liveness_check():
 
 
 # ────────────────────────────────────────────────
-# Startup Event (extra logging & optional notification)
+# Startup Logging (moved from deprecated @app.on_event)
 # ────────────────────────────────────────────────
-@app.on_event("startup")
+@app.on_startup
 async def startup_event():
     db_host = "Supabase" if "supabase" in str(settings.DATABASE_URL).lower() else \
               (settings.DATABASE_URL.host if hasattr(settings.DATABASE_URL, 'host') else 'unknown')
@@ -231,13 +254,3 @@ async def startup_event():
         f"started successfully in {settings.ENVIRONMENT.upper()} mode "
         f"(DB: {db_host}, Redis: {redis_host})"
     )
-
-    # Optional: notify admin/Slack on production startup
-    if settings.ENVIRONMENT == "production":
-        # send_email_task.delay(
-        #     to="admin@cursorcode.ai",
-        #     subject="API Started (Production)",
-        #     template_id="d-api-startup",
-        #     dynamic_data={"version": settings.APP_VERSION, "env": settings.ENVIRONMENT}
-        # )
-        pass
