@@ -15,7 +15,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_xai import ChatXAI
+# Removed broken import: from langchain_xai import ChatXAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
