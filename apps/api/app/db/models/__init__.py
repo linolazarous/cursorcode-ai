@@ -1,4 +1,4 @@
-# app/db/models/__init__.py
+# apps/api/app/db/models/__init__.py
 """
 Central aggregator / namespace for all SQLAlchemy models in CursorCode AI.
 
