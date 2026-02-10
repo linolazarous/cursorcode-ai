@@ -2,37 +2,24 @@
 """
 SQLAlchemy Models - Users & Organizations
 Core multi-tenant foundation for CursorCode AI (2026 production standards).
+Uses mixins from db/models/mixins.py for reusable patterns.
 """
 
 from datetime import datetime
 from typing import List, Optional
-from uuid import uuid4
 
-from sqlalchemy import (
-    Boolean,
-    ForeignKey,
-    Index,
-    Integer,
-    JSON,
-    String,
-    Text,
-    func,
-)
+from sqlalchemy import Boolean, ForeignKey, JSON, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from enum import Enum as PyEnum
 
 from app.db.base import Base, TimestampMixin
+from app.db.models.mixins import UUIDMixin, SoftDeleteMixin, AuditMixin, SlugMixin
+from app.db.models.utils import generate_unique_slug
+
+from . import UserRole  # Enum from same package
 
 
-class UserRole(str, PyEnum):
-    """User roles (RBAC) - scoped to organization."""
-    USER = "user"
-    ADMIN = "admin"
-    ORG_OWNER = "org_owner"
-
-
-class Org(Base, TimestampMixin):
+class Org(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
     """
     Organization / Tenant
     - Root of multi-tenancy
@@ -40,24 +27,9 @@ class Org(Base, TimestampMixin):
     - Supports teams (multiple users)
     """
     __tablename__ = "orgs"
-    __table_args__ = (
-        Index("ix_orgs_slug", "slug"),
-        Index("ix_orgs_deleted_at", "deleted_at"),
-        {'extend_existing': True},
-    )
 
-    id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid4,
-        server_default=func.gen_random_uuid(),
-        index=True,
-    )
-
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     slug: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
-
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(nullable=True, index=True)
 
     # Relationships
     users: Mapped[List["User"]] = relationship(
@@ -67,11 +39,16 @@ class Org(Base, TimestampMixin):
         "Project", back_populates="org", cascade="all, delete-orphan"
     )
 
+    @classmethod
+    async def create_unique_slug(cls, name: str, db) -> str:
+        """Generate unique slug for this organization."""
+        return await generate_unique_slug(name, cls, db=db)
+
     def __repr__(self) -> str:
-        return f"<Org(id={self.id}, name={self.name}, slug={self.slug})>"
+        return f"<Org(id={self.id}, name={self.name}, slug={self.slug}, active={self.is_active})>"
 
 
-class User(Base, TimestampMixin):
+class User(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
     """
     User Account (multi-tenant)
     - Belongs to exactly one Org
@@ -79,23 +56,7 @@ class User(Base, TimestampMixin):
     - Full billing, 2FA, verification, reset support
     """
     __tablename__ = "users"
-    __table_args__ = (
-        Index("ix_users_email_verified", "email", "is_verified"),
-        Index("ix_users_stripe_customer_id", "stripe_customer_id"),
-        Index("ix_users_org_id_role", "org_id", "roles"),
-        Index("ix_users_deleted_at", "deleted_at"),
-        {'extend_existing': True},
-    )
 
-    id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid4,
-        server_default=func.gen_random_uuid(),
-        index=True,
-    )
-
-    # Identity
     email: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False, index=True
     )
@@ -144,9 +105,6 @@ class User(Base, TimestampMixin):
         String(50), default="inactive", nullable=False
     )
 
-    # Lifecycle
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(nullable=True, index=True)
-
     # Relationships
     projects: Mapped[List["Project"]] = relationship(
         "Project", back_populates="user", cascade="all, delete-orphan"
@@ -156,7 +114,7 @@ class User(Base, TimestampMixin):
         return (
             f"<User(id={self.id}, email={self.email}, "
             f"org_id={self.org_id}, plan={self.plan}, "
-            f"credits={self.credits})>"
+            f"credits={self.credits}, active={self.is_active})>"
         )
 
     @property
@@ -182,4 +140,4 @@ class User(Base, TimestampMixin):
         return pyotp.totp.TOTP(self.totp_secret).provisioning_uri(
             name=self.email,
             issuer_name="CursorCode AI"
-        )
+            )
