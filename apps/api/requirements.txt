@@ -1,82 +1,54 @@
 # apps/api/requirements.txt
 
-# ────────────────────────────────────────────────
 # Core FastAPI & Server
-# ────────────────────────────────────────────────
-fastapi>=0.115.0
+fastapi>=0.115.2
 uvicorn[standard]>=0.30.6
 starlette>=0.40.0
 python-multipart>=0.0.9
-orjson>=3.10.0                  # Faster JSON parsing for FastAPI
+orjson>=3.10.7
 
-# ────────────────────────────────────────────────
 # Database & ORM (PostgreSQL + async + pgvector)
-# ────────────────────────────────────────────────
 sqlalchemy[asyncio]>=2.0.35
 asyncpg>=0.30.0
 pgvector>=0.3.0
-alembic>=1.13.3                 # Migrations
-psycopg2-binary>=2.9.9          # Needed for SQLAlchemy PostgreSQL dialect compat
+alembic>=1.13.3
+psycopg2-binary>=2.9.9
 
-# ────────────────────────────────────────────────
 # Auth, Security & Crypto
-# ────────────────────────────────────────────────
 argon2-cffi>=23.1.0
 pyjwt>=2.9.0
 pyotp>=2.9.0
 cryptography>=43.0.0
 passlib[bcrypt]>=1.7.4
 
-# ────────────────────────────────────────────────
-# AI / Agents / LangChain / xAI
-# ────────────────────────────────────────────────
+# AI / Agents / LangChain / xAI / LangGraph
 langchain-core>=0.2.38
-langchain-xai>=0.1.2            # xAI Grok integration
+langchain-xai>=0.1.2
 langgraph>=0.2.14
-langgraph-checkpoint-redis>=0.3.0  # Redis checkpointer for LangGraph
+langgraph-checkpoint-redis>=0.3.0
 tenacity>=8.5.0
 
-# ────────────────────────────────────────────────
 # Billing & Stripe
-# ────────────────────────────────────────────────
 stripe>=11.4.0
 
-# ────────────────────────────────────────────────
 # Email (Resend)
-# ────────────────────────────────────────────────
 resend>=2.0.0
 
-# ────────────────────────────────────────────────
 # Tasks, Queue & Redis
-# ────────────────────────────────────────────────
 celery[redis]>=5.4.0
 redis>=5.0.8
 
-# ────────────────────────────────────────────────
 # Rate Limiting & Middleware
-# ────────────────────────────────────────────────
 slowapi>=0.1.9
 
-# ────────────────────────────────────────────────
 # Observability & Monitoring
-# ────────────────────────────────────────────────
-prometheus-client>=0.20.0       # Optional /metrics endpoint
-structlog>=24.4.0               # Structured logging (better than basic logging)
+prometheus-client>=0.20.0
+structlog>=24.4.0
 
-# ────────────────────────────────────────────────
 # Utilities
-# ────────────────────────────────────────────────
 pydantic-settings>=2.5.2
-pydantic[email]>=2.9.0          # EmailStr + validators
+pydantic[email]>=2.9.2
 httpx>=0.27.2
 qrcode[pil]>=8.0.0
-pillow>=10.4.0                  # Required by qrcode[pil]
-python-dotenv>=1.0.1            # .env file support (dev only)
-aiohttp>=3.10.0                 # Async HTTP client (useful in agents)
-
-# ────────────────────────────────────────────────
-# Testing & Development
-# ────────────────────────────────────────────────
-pytest>=8.3.0
-pytest-asyncio>=0.23.0
-pytest-cov>=5.0.0               # Optional coverage
+pillow>=10.4.0
+aiohttp>=3.10.5
