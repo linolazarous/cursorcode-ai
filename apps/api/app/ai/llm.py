@@ -2,14 +2,14 @@
 """
 Grok LLM Factory - CursorCode AI
 Creates routed ChatXAI instances with optimal model, parameters, and tools.
-Production-ready (February 2026): caching, tier-aware routing, dynamic params, observability.
+Production-ready (February 2026): caching, tier-aware routing, dynamic params.
+Uses custom programmatic monitoring instead of Sentry.
 """
 
 import logging
 from functools import lru_cache
 from typing import List, Optional, Dict, Any
 
-import sentry_sdk
 from langchain_xai import ChatXAI
 from langchain_core.tools import BaseTool
 
@@ -49,10 +49,6 @@ def get_llm(
 
     if tools:
         llm = llm.bind_tools(tools)
-
-    # Sentry context
-    sentry_sdk.set_tag("grok_model", model_name)
-    sentry_sdk.set_tag("temperature", temperature)
 
     logger.debug(f"Created/cached LLM: {model_name} (temp={temperature}, tokens={max_tokens})")
 
@@ -112,7 +108,7 @@ def get_routed_llm(
         tools=tools,
     )
 
-    # 4. Audit model choice
+    # 4. Audit model choice (custom monitoring)
     audit_log.delay(
         user_id=None,  # Filled by caller context
         action="grok_llm_routed",
@@ -145,5 +141,6 @@ def estimate_prompt_tokens(messages: List[Dict[str, str]]) -> int:
     """
     total = 0
     for msg in messages:
-        total += len(msg.get("content", "")) // 4 + 10  # Overhead
+        content = msg.get("content", "")
+        total += len(content) // 4 + 10  # Overhead per message
     return total
