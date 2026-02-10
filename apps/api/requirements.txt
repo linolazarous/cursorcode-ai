@@ -1,5 +1,5 @@
 # apps/api/requirements.txt
-# Last updated: 2026-02-10 – no Redis checkpoint, compatible & minimal
+# Final version 2026-02-10 – no conflicts, no missing custom modules
 
 fastapi==0.115.2
 uvicorn[standard]==0.30.6
@@ -19,7 +19,7 @@ pyotp==2.9.0
 cryptography==43.0.0
 passlib[bcrypt]==1.7.4
 
-# AI / LangGraph stack (no Redis checkpoint)
+# AI / LangGraph (no custom pip packages – ChatXAI is local)
 langchain-core==0.2.38
 langgraph==0.2.14
 tenacity==8.5.0
