@@ -3,43 +3,24 @@
 SQLAlchemy Project Model - CursorCode AI
 Represents an autonomously generated software project.
 Multi-tenant scoped, tracks full lifecycle (prompt → build → deploy → maintain).
+Uses mixins from db/models/mixins.py for reusable patterns.
 """
 
 from datetime import datetime
 from typing import List, Optional, Dict
-from uuid import uuid4
 
-from sqlalchemy import (
-    ForeignKey,
-    Index,
-    Integer,
-    JSON,
-    String,
-    Text,
-    func,
-    Enum as SQLEnum,
-)
+from sqlalchemy import ForeignKey, Index, Integer, JSON, String, Text, func, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from enum import Enum as PyEnum
 
 from app.db.base import Base, TimestampMixin
+from app.db.models.mixins import UUIDMixin, SoftDeleteMixin, AuditMixin
+from app.db.models.utils import generate_unique_slug
+
+from . import ProjectStatus  # Enum from same package
 
 
-class ProjectStatus(str, PyEnum):
-    """
-    Project lifecycle states.
-    Stored as native PostgreSQL ENUM type.
-    """
-    PENDING = "pending"
-    BUILDING = "building"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    DEPLOYED = "deployed"
-    MAINTAINING = "maintaining"
-
-
-class Project(Base, TimestampMixin):
+class Project(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
     """
     Project Entity
     - Created from user prompt via AI agents
@@ -52,16 +33,7 @@ class Project(Base, TimestampMixin):
         Index("ix_projects_user_id_status", "user_id", "status"),
         Index("ix_projects_org_id", "org_id"),
         Index("ix_projects_deploy_url", "deploy_url"),
-        Index("ix_projects_deleted_at", "deleted_at"),
         {'extend_existing': True},
-    )
-
-    id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid4,
-        server_default=func.gen_random_uuid(),
-        index=True,
     )
 
     # Core
@@ -113,8 +85,8 @@ class Project(Base, TimestampMixin):
     user: Mapped["User"] = relationship("User", back_populates="projects")
     org: Mapped["Org"] = relationship("Org", back_populates="projects")
 
-    # Lifecycle
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(nullable=True, index=True)
+    # Lifecycle (from SoftDeleteMixin)
+    # deleted_at already inherited
 
     def __repr__(self) -> str:
         return (
@@ -146,3 +118,8 @@ class Project(Base, TimestampMixin):
             self.versions = []
         self.versions.append(version_data)
         self.current_version += 1
+
+    @classmethod
+    async def create_unique_slug(cls, title: str, db) -> str:
+        """Generate unique slug for this project based on title."""
+        return await generate_unique_slug(title, cls, db=db)
