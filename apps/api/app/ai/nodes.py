@@ -3,6 +3,7 @@
 Per-Agent Node Implementations - CursorCode AI
 Each agent has specialized prompt, tools, model routing, and state updates.
 Integrates token metering, retries, error handling, and audit logging.
+Uses raw httpx-based LLM from llm.py (no LangChain LLM classes).
 """
 
 import logging
@@ -10,16 +11,12 @@ import json
 from typing import Dict, Any, Optional
 from uuid import uuid4
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
-from langchain_core.exceptions import OutputParserException
-from langchain_core.callbacks import AsyncCallbackHandler
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
 from app.services.logging import audit_log
 from app.tasks.metering import report_grok_usage
-from .llm import get_routed_llm
+from .llm import get_routed_llm, estimate_prompt_tokens
 from .tools import (
     tools,  # Full set
     architect_tools, frontend_tools, backend_tools, security_tools, qa_tools, devops_tools
@@ -85,18 +82,6 @@ AGENT_TOOLS = {
     "devops": devops_tools,
 }
 
-# ────────────────────────────────────────────────
-# Token Usage Callback Handler
-# ────────────────────────────────────────────────
-class TokenUsageHandler(AsyncCallbackHandler):
-    """Tracks token usage during LLM calls"""
-    def __init__(self):
-        self.total_tokens = 0
-
-    async def on_llm_end(self, response, **kwargs):
-        if hasattr(response, "llm_output") and "token_usage" in response.llm_output:
-            usage = response.llm_output["token_usage"]
-            self.total_tokens += usage.get("total_tokens", 0)
 
 # ────────────────────────────────────────────────
 # Generic Agent Node (with token metering)
@@ -104,7 +89,6 @@ class TokenUsageHandler(AsyncCallbackHandler):
 @retry(
     stop=stop_after_attempt(4),
     wait=wait_exponential(multiplier=1, min=4, max=30),
-    retry=retry_if_exception_type((Exception, OutputParserException)),
     reraise=True,
 )
 async def agent_node(
@@ -114,55 +98,49 @@ async def agent_node(
 ) -> Dict[str, Any]:
     """
     Generic node for any agent.
-    - Routes to correct model
-    - Binds agent-specific tools
+    - Routes to correct model via raw httpx callable
     - Runs LLM call
-    - Tracks tokens for metering
+    - Tracks tokens for metering (estimate-based)
     - Updates state
     - Audits call
     """
     # Get system prompt (use key or fallback to agent_type)
     system_prompt = AGENT_PROMPTS.get(system_prompt_key or agent_type, AGENT_PROMPTS[agent_type])
 
-    # Bind tools (agent-specific subset)
+    # Get agent-specific tools
     tools_subset = AGENT_TOOLS.get(agent_type, tools)
 
-    # Get routed LLM
-    llm = get_routed_llm(
+    # Get routed LLM callable (raw httpx async function)
+    llm_callable = get_routed_llm(
         agent_type=agent_type,
         user_tier=state.get("user_tier", "starter"),
         task_complexity=state.get("task_complexity", "medium"),
         tools=tools_subset,
     )
 
-    # Build prompt
-    prompt_template = ChatPromptTemplate.from_messages([
-        ("system", system_prompt + "\nUse tools only when necessary. Be concise and production-ready."),
-        *state["messages"],
-    ])
+    # Build messages list (system prompt + history)
+    messages = [{"role": "system", "content": system_prompt}] + [
+        {"role": m.type, "content": m.content} for m in state["messages"]
+    ]
 
-    # Inject initial prompt if first message
+    # Add initial prompt if this is the first agent call
     if not state["messages"]:
-        prompt_template = prompt_template.append(("human", state["prompt"]))
-
-    # Token usage tracking
-    token_handler = TokenUsageHandler()
+        messages.append({"role": "user", "content": state["prompt"]})
 
     try:
-        # Invoke LLM with callback
-        response: AIMessage = await llm.ainvoke(
-            prompt_template.format_messages(**state),
-            config={"callbacks": [token_handler]},
-        )
+        # Call raw LLM (await the callable)
+        response_content = await llm_callable(messages)
 
-        # Get accurate token count from callback
-        tokens_used = token_handler.total_tokens or len(response.content) // 4
+        # Rough token estimation (input + output)
+        input_tokens = estimate_prompt_tokens(messages)
+        output_tokens = len(response_content) // 4
+        tokens_used = input_tokens + output_tokens
 
         # Queue metering
         report_grok_usage.delay(
             user_id=state.get("user_id"),
             tokens_used=tokens_used,
-            model_name=llm.model,
+            model_name="mixed_grok",  # Update if you want model-specific
             request_id=str(uuid4()),
         )
 
@@ -173,25 +151,24 @@ async def agent_node(
             metadata={
                 "project_id": state.get("project_id"),
                 "tokens": tokens_used,
-                "model": llm.model,
-                "has_tool_calls": bool(response.tool_calls),
+                "model": "mixed_grok",
+                "has_tool_calls": False,  # Raw httpx doesn't support tool calls yet
             },
         )
 
         # Update state
         updates = {
-            "messages": state["messages"] + [response],
+            "messages": state["messages"] + [AIMessage(content=response_content)],
             "total_tokens_used": state.get("total_tokens_used", 0) + tokens_used,
         }
 
-        # Agent-specific state updates (structured parsing)
-        if not response.tool_calls:
-            content = response.content.strip()
+        # Agent-specific state updates (structured parsing attempt)
+        if agent_type in ["architect", "security", "qa"]:
             try:
-                parsed = json.loads(content)
+                parsed = json.loads(response_content.strip())
                 updates[agent_type] = parsed
             except json.JSONDecodeError:
-                updates[f"{agent_type}_raw"] = content
+                updates[f"{agent_type}_raw"] = response_content
 
         return updates
 
