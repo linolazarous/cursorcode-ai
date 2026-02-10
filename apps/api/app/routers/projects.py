@@ -3,6 +3,7 @@
 Projects Router - CursorCode AI
 CRUD operations for AI-generated projects.
 Includes credit checks, orchestration trigger, multi-tenant scoping, audit logging.
+Supports real-time streaming via SSE for orchestration progress.
 """
 
 import logging
@@ -17,23 +18,25 @@ from fastapi import (
     status,
     BackgroundTasks,
     Query,
-    Request,  # Required for slowapi rate limiting
+    Request,
+    Response,
 )
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.core.config import settings
 from app.db.session import get_db
 from app.middleware.auth import get_current_user, AuthUser
 from app.models.project import Project, ProjectStatus
-from app.models.user import User
 from app.services.billing import deduct_credits
 from app.services.email import send_deployment_success_email
 from app.services.logging import audit_log
-from app.ai.orchestrator import run_agent_graph_task  # Celery task
+from app.ai.orchestrator import stream_orchestration  # ← Streaming function
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +44,12 @@ router = APIRouter(prefix="/projects", tags=["Projects"])
 
 security = HTTPBearer(auto_error=False)
 
-limiter = Limiter(key_func=lambda r: r.client.host)
+# Rate limit: 5 projects per minute per user (not IP)
+limiter = Limiter(key_func=lambda r: r.state.user_id if hasattr(r.state, "user_id") else get_remote_address())
 
 
 class ProjectCreate(BaseModel):
-    prompt: str = Field(..., min_length=10, description="Natural language description of the app to build")
+    prompt: str = Field(..., min_length=10, max_length=4000, description="Natural language description of the app")
     title: Optional[str] = Field(None, max_length=255)
 
 
@@ -73,12 +77,7 @@ class ProjectOut(BaseModel):
     "/",
     response_model=ProjectOut,
     status_code=status.HTTP_201_CREATED,
-    summary="Create new AI-generated project",
-    responses={
-        201: {"description": "Project created and orchestration started"},
-        402: {"description": "Insufficient credits"},
-        429: {"description": "Rate limit exceeded"},
-    }
+    summary="Create new AI-generated project (streaming via SSE)",
 )
 @limiter.limit("5/minute")
 async def create_project(
@@ -90,12 +89,15 @@ async def create_project(
 ):
     """
     Create a new project from prompt.
-    Deducts credits → triggers agent orchestration → sends email on success/failure.
+    - Deducts credits
+    - Triggers agent orchestration
+    - Returns project metadata immediately
+    - Client can connect to /projects/{id}/stream for real-time tokens
     """
     # Credit check & atomic deduction
     success, msg = await deduct_credits(
         user_id=current_user.id,
-        amount=10,  # Fixed cost per project start (adjust per plan)
+        amount=10,  # TODO: make dynamic based on user_tier / complexity
         reason=f"Project creation: {payload.prompt[:50]}...",
         db=db,
     )
@@ -114,14 +116,16 @@ async def create_project(
     await db.commit()
     await db.refresh(project)
 
-    # Trigger AI agent orchestration (async via Celery)
-    run_agent_graph_task.delay(
+    # Trigger background orchestration (non-streaming Celery fallback)
+    background_tasks.add_task(
+        run_agent_graph_task.delay,
         project_id=str(project.id),
         prompt=payload.prompt,
         user_id=current_user.id,
         org_id=current_user.org_id,
     )
 
+    # Audit
     audit_log.delay(
         user_id=current_user.id,
         action="project_created",
@@ -134,19 +138,62 @@ async def create_project(
         request=request,
     )
 
+    # Email notification (async)
     background_tasks.add_task(
-        send_email_task.delay,
-        to=current_user.email,
-        subject="New Project Started - CursorCode AI",
-        html=f"""
-        <h2>New Project Created!</h2>
-        <p>Your project "{project.title}" has been started.</p>
-        <p>We'll notify you when it's ready.</p>
-        <p><a href="{settings.FRONTEND_URL}/projects/{project.id}">View in dashboard</a></p>
-        """,
+        send_deployment_success_email,
+        email=current_user.email,
+        project_title=project.title or "Untitled Project",
+        deploy_url=None,  # Updated later
     )
 
     return project
+
+
+@router.get(
+    "/{project_id}/stream",
+    summary="Stream real-time orchestration progress (SSE)",
+    response_class=StreamingResponse,
+)
+@limiter.limit("10/minute")
+async def stream_project(
+    project_id: UUID,
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Server-Sent Events (SSE) endpoint for real-time token streaming.
+    Client connects here after creating a project.
+    """
+    project = await db.get(Project, project_id)
+    if not project or project.user_id != UUID(current_user.id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found or not owned")
+
+    if project.status not in [ProjectStatus.PENDING, ProjectStatus.RUNNING]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Project not in streamable state")
+
+    async def sse_generator():
+        yield "data: [START] Orchestration started\n\n"
+
+        async for chunk in stream_orchestration(
+            project_id=str(project.id),
+            prompt=project.prompt,
+            user_id=current_user.id,
+            org_id=current_user.org_id,
+            user_tier="starter",  # TODO: from user profile
+        ):
+            yield f"data: {chunk}\n\n"
+
+        yield "data: [COMPLETE] Orchestration finished\n\n"
+
+    return StreamingResponse(
+        sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Important for Render/NGINX
+        }
+    )
 
 
 @router.get(
@@ -161,9 +208,6 @@ async def list_projects(
     limit: int = Query(20, ge=1, le=100),
     status: Optional[ProjectStatus] = None,
 ):
-    """
-    List projects scoped to the current user/org.
-    """
     stmt = (
         select(Project)
         .where(Project.user_id == UUID(current_user.id))
@@ -191,9 +235,6 @@ async def get_project(
     current_user: Annotated[AuthUser, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Retrieve a specific project (must belong to user/org).
-    """
     project = await db.get(Project, project_id)
     if not project or project.user_id != UUID(current_user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
@@ -202,50 +243,33 @@ async def get_project(
 
 
 @router.patch(
-    "/{project_id}/status",
+    "/{project_id}",
     response_model=ProjectOut,
-    summary="Update project status (internal/agent use)",
+    summary="Update project (title, status)",
 )
-async def update_project_status(
+async def update_project(
     project_id: UUID,
     payload: ProjectUpdate,
     current_user: Annotated[AuthUser, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Update status (e.g., by agent orchestration or admin).
-    Restricted to org_owner/admin or system.
-    """
     project = await db.get(Project, project_id)
     if not project or project.org_id != UUID(current_user.org_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
 
-    # RBAC: only org owner/admin or system can update status
-    if "org_owner" not in current_user.roles and "admin" not in current_user.roles:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions")
-
-    if payload.status:
-        project.status = payload.status
     if payload.title:
         project.title = payload.title
+    if payload.status:
+        project.status = payload.status
 
     await db.commit()
     await db.refresh(project)
 
     audit_log.delay(
-        current_user.id,
-        "project_status_updated",
-        {"project_id": str(project_id), "new_status": project.status}
+        user_id=current_user.id,
+        action="project_updated",
+        metadata={"project_id": str(project_id), "changes": payload.dict(exclude_unset=True)}
     )
-
-    # Notify on deployment success
-    if project.status == ProjectStatus.DEPLOYED and project.deploy_url:
-        send_deployment_success_email(
-            email=current_user.email,
-            project_title=project.title or "Untitled Project",
-            deploy_url=project.deploy_url,
-            preview_url=project.preview_url,
-        )
 
     return project
 
@@ -253,31 +277,24 @@ async def update_project_status(
 @router.delete(
     "/{project_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete project",
+    summary="Delete project (soft delete)",
 )
 async def delete_project(
     project_id: UUID,
     current_user: Annotated[AuthUser, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Soft-delete a project (owner or org_admin only).
-    """
     project = await db.get(Project, project_id)
     if not project or project.user_id != UUID(current_user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
-
-    # RBAC check
-    if "org_owner" not in current_user.roles and str(project.user_id) != current_user.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions")
 
     project.deleted_at = datetime.utcnow()
     await db.commit()
 
     audit_log.delay(
-        current_user.id,
-        "project_deleted",
-        {"project_id": str(project_id)}
+        user_id=current_user.id,
+        action="project_deleted",
+        metadata={"project_id": str(project_id)}
     )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
