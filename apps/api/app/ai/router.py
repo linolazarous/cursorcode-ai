@@ -3,11 +3,14 @@
 Grok Model Router - CursorCode AI
 Intelligent multi-model routing across xAI Grok family (2026 standards).
 Optimizes for reasoning depth, speed, cost, and task type.
+Uses official langchain-groq integration.
 """
 
 import logging
-import os
-from typing import Optional
+from typing import Optional, List
+
+from langchain_groq import ChatGroq
+from langchain_core.tools import BaseTool
 
 from app.core.config import settings
 from app.services.logging import audit_log
@@ -18,13 +21,16 @@ logger = logging.getLogger(__name__)
 # Model Registry (from env + defaults)
 # ────────────────────────────────────────────────
 MODELS = {
-    "default_reasoning": settings.DEFAULT_XAI_MODEL or "grok-4-latest",
-    "fast_reasoning": settings.FAST_REASONING_MODEL or "grok-4-1-fast-reasoning",
-    "fast_non_reasoning": settings.FAST_NON_REASONING_MODEL or "grok-4-1-fast-non-reasoning",
+    "default_reasoning": settings.DEFAULT_XAI_MODEL or "grok-beta",
+    "fast_reasoning": settings.FAST_REASONING_MODEL or "grok-beta-fast",
+    "fast_non_reasoning": settings.FAST_NON_REASONING_MODEL or "grok-beta-fast",
 }
 
+# Fallback if env vars are missing
+DEFAULT_FALLBACK_MODEL = "grok-beta"
+
 # ────────────────────────────────────────────────
-# Agent → Model Mapping (core logic)
+# Agent → Model Preference Mapping
 # ────────────────────────────────────────────────
 AGENT_MODEL_PREFERENCE = {
     # Deep reasoning / planning agents
@@ -41,7 +47,9 @@ AGENT_MODEL_PREFERENCE = {
     "devops": "fast_non_reasoning",
 }
 
-# Optional overrides (e.g. for Pro/Premier tiers → more reasoning)
+# ────────────────────────────────────────────────
+# Core Routing Logic
+# ────────────────────────────────────────────────
 def get_model_for_agent(
     agent_type: str,
     user_tier: str = "starter",           # "starter", "standard", "pro", "premier", "ultra"
@@ -49,7 +57,7 @@ def get_model_for_agent(
     force_model: Optional[str] = None,
 ) -> str:
     """
-    Returns the optimal Grok model for the given agent/task.
+    Returns the optimal Grok model name for the given agent/task.
     Factors: agent type, user plan, task complexity, cost optimization.
     """
     if force_model and force_model in MODELS.values():
@@ -67,33 +75,36 @@ def get_model_for_agent(
         logger.info(f"Task complexity high → upgrading to default_reasoning for {agent_type}")
         preferred = "default_reasoning"
 
-    # Cost optimization fallback (e.g. Starter → always fast)
+    # Cost optimization fallback (Starter tier → always fast)
     if user_tier == "starter" and preferred == "default_reasoning":
         logger.info(f"Starter tier → downgrading to fast_non_reasoning for {agent_type}")
         preferred = "fast_non_reasoning"
 
-    selected = MODELS.get(preferred, MODELS["fast_non_reasoning"])
+    selected = MODELS.get(preferred, DEFAULT_FALLBACK_MODEL)
 
     # Audit routing decision
     audit_log.delay(
-        user_id=None,  # Will be filled by caller
+        user_id=None,  # Filled by caller context
         action="grok_model_routed",
         metadata={
             "agent_type": agent_type,
             "user_tier": user_tier,
             "task_complexity": task_complexity,
             "selected_model": selected,
-            "reason": preferred
+            "reason": preferred,
+            "env_default": settings.DEFAULT_XAI_MODEL,
         }
     )
 
-    logger.info(f"Routed {agent_type} (tier={user_tier}, complexity={task_complexity}) → {selected}")
+    logger.info(
+        f"Routed {agent_type} (tier={user_tier}, complexity={task_complexity}) → {selected}"
+    )
 
     return selected
 
 
 # ────────────────────────────────────────────────
-# LLM Factory (used in nodes.py)
+# Routed LLM Factory (used in nodes.py)
 # ────────────────────────────────────────────────
 def get_routed_llm(
     agent_type: str,
@@ -101,16 +112,17 @@ def get_routed_llm(
     task_complexity: str = "medium",
     temperature: float = 0.3,             # Lower for precision
     max_tokens: int = 8192,
-    tools: Optional[List] = None,
-):
+    tools: Optional[List[BaseTool]] = None,
+) -> ChatGroq:
     """
-    Returns configured ChatXAI instance with correct model.
+    Returns configured ChatGroq instance with correct model.
+    Uses official langchain-groq package.
     """
     model_name = get_model_for_agent(agent_type, user_tier, task_complexity)
 
-    llm = ChatXAI(
+    llm = ChatGroq(
         model=model_name,
-        api_key=settings.XAI_API_KEY.get_secret_value(),
+        groq_api_key=settings.XAI_API_KEY.get_secret_value(),
         base_url="https://api.x.ai/v1",
         temperature=temperature,
         max_tokens=max_tokens,
