@@ -7,6 +7,7 @@ Migrated from SendGrid → Resend (plain HTML emails).
 
 import logging
 import secrets
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, List
 
@@ -20,7 +21,7 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     HTTPException,
-    Request,          # Required for slowapi rate limiting
+    Request,
     Response,
     status,
 )
@@ -35,7 +36,7 @@ from base64 import b64encode
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, AuthUser
 from app.models.user import User
 from app.services.logging import audit_log
 from app.tasks.email import send_email_task
@@ -45,9 +46,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 # ────────────────────────────────────────────────
-# Rate Limiter (per-IP, can be overridden per-route)
+# Rate Limiter – per user when authenticated, else per IP
 # ────────────────────────────────────────────────
-limiter = Limiter(key_func=get_remote_address)
+def auth_limiter_key(request: Request) -> str:
+    user = getattr(request.state, "user", None)
+    if user and hasattr(user, "id"):
+        return str(user.id)
+    return get_remote_address()
+
+limiter = Limiter(key_func=auth_limiter_key)
 
 # ────────────────────────────────────────────────
 # Security & Config
@@ -62,25 +69,25 @@ BACKUP_CODES_COUNT = 10
 # ────────────────────────────────────────────────
 class SignupRequest(BaseModel):
     email: EmailStr = Field(..., example="user@example.com")
-    password: str = Field(..., min_length=12)
+    password: str = Field(..., min_length=12, description="Minimum 12 characters")
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
-    totp_code: str | None = None
+    totp_code: Optional[str] = Field(None, pattern=r"^\d{6}$", description="6-digit 2FA code")
 
 class ResetRequest(BaseModel):
     email: EmailStr = Field(..., example="user@example.com")
 
 class ResetConfirm(BaseModel):
-    token: str
+    token: str = Field(...)
     new_password: str = Field(..., min_length=12)
 
 class Enable2FARequest(BaseModel):
     pass
 
 class Verify2FARequest(BaseModel):
-    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+    code: str = Field(..., pattern=r"^\d{6}$", description="6-digit code")
 
 class TokenResponse(BaseModel):
     message: str
@@ -89,6 +96,7 @@ class QRResponse(BaseModel):
     qr_code_base64: str
     secret: str
     backup_codes: List[str]
+
 
 # ────────────────────────────────────────────────
 # JWT Helpers
@@ -105,20 +113,28 @@ def create_refresh_token(data: dict) -> str:
     to_encode.update({"exp": expire, "type": "refresh"})
     return jwt.encode(to_encode, settings.JWT_REFRESH_SECRET, algorithm="HS256")
 
+
 # ────────────────────────────────────────────────
 # Signup - Heavily rate-limited
 # ────────────────────────────────────────────────
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("5/minute")  # Prevent mass account creation
+@limiter.limit("5/minute")
 async def signup(
     request: Request,
     background_tasks: BackgroundTasks,
     payload: SignupRequest,
     db: AsyncSession = Depends(get_db)
 ):
+    """
+    Create a new account. Sends verification email.
+    Rate limited to prevent mass registration.
+    """
     existing = await db.scalar(select(User).where(User.email == payload.email))
     if existing:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Email already registered")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered"
+        )
 
     hashed_password = pwd_hasher.hash(payload.password)
     verification_token = secrets.token_urlsafe(48)
@@ -139,11 +155,10 @@ async def signup(
 
     html = f"""
     <h2>Welcome to CursorCode AI!</h2>
-    <p>Thank you for signing up.</p>
-    <p>Please verify your email by clicking the link below:</p>
-    <p><a href="{verification_url}">Verify Email Address</a></p>
+    <p>Thank you for signing up. Please verify your email address.</p>
+    <p><a href="{verification_url}" style="padding: 10px 20px; background: #0066cc; color: white; text-decoration: none; border-radius: 5px;">Verify Email</a></p>
     <p>This link expires in 24 hours.</p>
-    <p>If you didn't create this account, you can safely ignore this email.</p>
+    <p>If you didn't create this account, ignore this email.</p>
     <br>
     <p>Best regards,<br>CursorCode AI Team</p>
     """
@@ -155,15 +170,28 @@ async def signup(
         html=html
     )
 
-    audit_log.delay(user.id, "signup", {"email": payload.email, "ip": request.client.host})
+    audit_log.delay(
+        user_id=str(user.id),
+        action="signup_attempt",
+        metadata={"email": payload.email, "ip": request.client.host}
+    )
 
     return {"message": "Account created. Check your email to verify."}
 
+
 # ────────────────────────────────────────────────
-# Verify Email (no rate limit needed - token is single-use)
+# Verify Email
 # ────────────────────────────────────────────────
 @router.get("/verify", response_model=TokenResponse)
-async def verify_email(token: str, response: Response, db: AsyncSession = Depends(get_db)):
+async def verify_email(
+    token: str,
+    response: Response,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verify email with token from signup/reset.
+    Logs user in on success.
+    """
     user = await db.scalar(
         select(User).where(
             User.verification_token == token,
@@ -173,7 +201,10 @@ async def verify_email(token: str, response: Response, db: AsyncSession = Depend
     )
 
     if not user:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired token")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification token"
+        )
 
     user.is_verified = True
     user.verification_token = None
@@ -186,41 +217,47 @@ async def verify_email(token: str, response: Response, db: AsyncSession = Depend
     response.set_cookie("access_token", access_token, **settings.COOKIE_DEFAULTS)
     response.set_cookie("refresh_token", refresh_token, **settings.COOKIE_DEFAULTS)
 
-    audit_log.delay(user.id, "email_verified", {})
+    audit_log.delay(str(user.id), "email_verified", {"token_used": token})
 
-    return {"message": "Email verified. Logged in."}
+    return {"message": "Email verified. You are now logged in."}
+
 
 # ────────────────────────────────────────────────
 # Login - Rate limited + 2FA support
 # ────────────────────────────────────────────────
 @router.post("/login", response_model=TokenResponse)
-@limiter.limit("10/minute")  # Bruteforce protection
+@limiter.limit("10/minute")
 async def login(
     request: Request,
-    payload: LoginRequest,
+    form_data: OAuth2PasswordRequestForm = Depends(),
     response: Response,
     db: AsyncSession = Depends(get_db)
 ):
-    user = await db.scalar(select(User).where(User.email == payload.email))
+    """
+    Login with email/password + optional 2FA.
+    Returns JWT tokens in cookies.
+    """
+    user = await db.scalar(select(User).where(User.email == form_data.username))
     if not user:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
 
     try:
-        pwd_hasher.verify(user.hashed_password, payload.password)
+        pwd_hasher.verify(user.hashed_password, form_data.password)
     except VerifyMismatchError:
+        audit_log.delay(None, "login_failed", {"email": form_data.username, "ip": request.client.host})
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
 
     if not user.is_verified:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Email not verified")
 
-    # 2FA enforcement
+    # 2FA check
     if user.totp_enabled:
-        if not payload.totp_code:
+        if not form_data.totp_code:
             raise HTTPException(status.HTTP_428_PRECONDITION_REQUIRED, "2FA code required")
 
         totp = pyotp.TOTP(user.totp_secret)
-        if not totp.verify(payload.totp_code, valid_window=1):
-            audit_log.delay(user.id, "2fa_failed", {"ip": request.client.host})
+        if not totp.verify(form_data.totp_code, valid_window=1):
+            audit_log.delay(str(user.id), "2fa_failed", {"ip": request.client.host})
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid 2FA code")
 
     access_token = create_access_token({"sub": str(user.id), "email": user.email, "roles": user.roles})
@@ -229,22 +266,25 @@ async def login(
     response.set_cookie("access_token", access_token, **settings.COOKIE_DEFAULTS)
     response.set_cookie("refresh_token", refresh_token, **settings.COOKIE_DEFAULTS)
 
-    audit_log.delay(user.id, "login_success", {"method": "password+2fa" if payload.totp_code else "password"})
+    audit_log.delay(str(user.id), "login_success", {"method": "password+2fa" if form_data.totp_code else "password"})
 
     return {"message": "Logged in successfully"}
 
+
 # ────────────────────────────────────────────────
-# Password Reset Request - Rate limited
+# Password Reset Request
 # ────────────────────────────────────────────────
 @router.post("/reset-password/request", status_code=status.HTTP_200_OK)
-@limiter.limit("3/minute")  # Anti-enumeration + abuse prevention
+@limiter.limit("3/minute")
 async def request_password_reset(
     request: Request,
     background_tasks: BackgroundTasks,
     payload: ResetRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    # Always 200 to prevent email enumeration
+    """
+    Request password reset link. Always returns 200 to prevent enumeration.
+    """
     user = await db.scalar(select(User).where(User.email == payload.email))
     if not user:
         logger.info(f"Reset requested for non-existent email: {payload.email}")
@@ -261,11 +301,10 @@ async def request_password_reset(
 
     html = f"""
     <h2>Password Reset Request</h2>
-    <p>You (or someone else) requested a password reset for your CursorCode AI account.</p>
-    <p>Click the link below to set a new password:</p>
-    <p><a href="{reset_url}">Reset Password</a></p>
+    <p>A password reset was requested for your CursorCode AI account.</p>
+    <p><a href="{reset_url}" style="padding: 10px 20px; background: #0066cc; color: white; text-decoration: none; border-radius: 5px;">Reset Password</a></p>
     <p>This link expires in 1 hour.</p>
-    <p>If you did not request this, you can safely ignore this email.</p>
+    <p>If you did not request this, ignore this email — your account is safe.</p>
     <br>
     <p>Best regards,<br>CursorCode AI Team</p>
     """
@@ -277,9 +316,10 @@ async def request_password_reset(
         html=html
     )
 
-    audit_log.delay(user.id, "reset_password_requested", {"ip": request.client.host})
+    audit_log.delay(str(user.id), "reset_password_requested", {"ip": request.client.host})
 
     return {"message": "If the email exists, a reset link has been sent."}
+
 
 # ────────────────────────────────────────────────
 # Password Reset Confirm
@@ -290,6 +330,10 @@ async def confirm_password_reset(
     response: Response,
     db: AsyncSession = Depends(get_db)
 ):
+    """
+    Confirm password reset with token and set new password.
+    Logs user in on success.
+    """
     user = await db.scalar(
         select(User).where(
             User.reset_expires > datetime.now(timezone.utc),
@@ -316,93 +360,123 @@ async def confirm_password_reset(
     response.set_cookie("access_token", access_token, **settings.COOKIE_DEFAULTS)
     response.set_cookie("refresh_token", refresh_token, **settings.COOKIE_DEFAULTS)
 
-    audit_log.delay(user.id, "password_reset_success", {})
+    audit_log.delay(str(user.id), "password_reset_success", {})
 
     return {"message": "Password reset successful. You are now logged in."}
 
+
 # ────────────────────────────────────────────────
-# 2FA Endpoints (rate limited)
+# 2FA Enable + QR Code
 # ────────────────────────────────────────────────
 @router.post("/2fa/enable", response_model=QRResponse)
 @limiter.limit("5/minute")
 async def enable_2fa(
-    request: Request,  # ← Required for slowapi
-    current_user: Annotated[User, Depends(get_current_user)],
+    request: Request,
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db)
 ):
-    if current_user.totp_secret:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "2FA already enabled")
+    """
+    Enable 2FA for the current user.
+    Returns QR code and backup codes (show once!).
+    """
+    user = await db.get(User, UUID(current_user.id))
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+
+    if user.totp_enabled:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "2FA is already enabled")
 
     secret = pyotp.random_base32()
-    current_user.totp_secret = secret
+    user.totp_secret = secret
 
     backup_codes = [secrets.token_hex(8) for _ in range(BACKUP_CODES_COUNT)]
     hashed_backups = [pwd_hasher.hash(code) for code in backup_codes]
-    current_user.totp_backup_codes = json.dumps(hashed_backups)
+    user.totp_backup_codes = json.dumps(hashed_backups)
 
     await db.commit()
 
     provisioning_uri = pyotp.totp.TOTP(secret).provisioning_uri(
-        name=current_user.email,
+        name=user.email,
         issuer_name=TOTP_ISSUER
     )
+
     qr = qrcode.make(provisioning_uri)
     buffered = BytesIO()
     qr.save(buffered, format="PNG")
     qr_base64 = b64encode(buffered.getvalue()).decode("utf-8")
 
-    audit_log.delay(current_user.id, "2fa_enabled", {})
+    audit_log.delay(
+        user_id=current_user.id,
+        action="2fa_enabled",
+        metadata={"ip": request.client.host}
+    )
 
-    return {
-        "qr_code_base64": f"data:image/png;base64,{qr_base64}",
-        "secret": secret,
-        "backup_codes": backup_codes  # Show once!
-    }
+    return QRResponse(
+        qr_code_base64=f"data:image/png;base64,{qr_base64}",
+        secret=secret,
+        backup_codes=backup_codes  # Display only once!
+    )
+
 
 @router.post("/2fa/verify")
 @limiter.limit("15/minute")
 async def verify_2fa_setup(
-    request: Request,  # ← Required for slowapi
+    request: Request,
     payload: Verify2FARequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[AuthUser, Depends(get_current_user)],
     db: AsyncSession = Depends(get_db)
 ):
-    if not current_user.totp_secret:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "2FA not enabled")
+    """
+    Verify 2FA setup code to finalize enabling.
+    """
+    user = await db.get(User, UUID(current_user.id))
+    if not user or not user.totp_secret:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "2FA not enabled or setup incomplete")
 
-    totp = pyotp.TOTP(current_user.totp_secret)
+    totp = pyotp.TOTP(user.totp_secret)
     if not totp.verify(payload.code, valid_window=1):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid code")
+        audit_log.delay(
+            user_id=current_user.id,
+            action="2fa_verify_failed",
+            metadata={"ip": request.client.host}
+        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid 2FA code")
 
-    current_user.totp_enabled = True
+    user.totp_enabled = True
     await db.commit()
 
-    audit_log.delay(current_user.id, "2fa_verified_setup", {})
+    audit_log.delay(
+        user_id=current_user.id,
+        action="2fa_verified_setup",
+        metadata={"ip": request.client.host}
+    )
 
     html = f"""
-    <h2>2FA Enabled on Your Account</h2>
-    <p>Two-factor authentication has been successfully enabled for your CursorCode AI account.</p>
-    <p>Your account is now more secure.</p>
-    <p>If this was not you, please contact support immediately.</p>
+    <h2>2FA Successfully Enabled</h2>
+    <p>Two-factor authentication is now active on your CursorCode AI account.</p>
+    <p>Your account is more secure. Keep your backup codes safe.</p>
+    <p>If this was not you, contact support immediately.</p>
     <br>
     <p>Best regards,<br>CursorCode AI Team</p>
     """
 
     send_email_task.delay(
-        to=current_user.email,
+        to=user.email,
         subject="2FA Enabled on Your Account",
         html=html
     )
 
     return {"message": "2FA enabled successfully"}
 
-# ────────────────────────────────────────────────
-# OAuth Stubs
-# ────────────────────────────────────────────────
-@router.get("/google", summary="Start Google OAuth")
-async def google_login():
-    return {"redirect": f"{settings.FRONTEND_URL}/api/auth/signin/google"}
 
-@router.get("/github", summary="Start GitHub OAuth")
+# ────────────────────────────────────────────────
+# OAuth Stubs (Google/GitHub)
+# ────────────────────────────────────────────────
+@router.get("/google", summary="Start Google OAuth flow")
+async def google_login():
+    return {"redirect": f"{settings.FRONTEND_URL}/auth/signin/google"}
+
+
+@router.get("/github", summary="Start GitHub OAuth flow")
 async def github_login():
-    return {"redirect": f"{settings.FRONTEND_URL}/api/auth/signin/github"}
+    return {"redirect": f"{settings.FRONTEND_URL}/auth/signin/github"}
