@@ -6,13 +6,15 @@ Integrates token metering, retries, error handling, and audit logging.
 """
 
 import logging
+import json
 from typing import Dict, Any, Optional
+from uuid import uuid4
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
 from langchain_core.exceptions import OutputParserException
+from langchain_core.callbacks import AsyncCallbackHandler
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-import sentry_sdk
 
 from app.core.config import settings
 from app.services.logging import audit_log
@@ -24,7 +26,6 @@ from .tools import (
 )
 
 logger = logging.getLogger(__name__)
-
 
 # ────────────────────────────────────────────────
 # Agent-specific system prompts (concise, role-focused)
@@ -72,19 +73,30 @@ Focus on zero-downtime, auto-scaling, monitoring.
 """
 }
 
-
 # ────────────────────────────────────────────────
 # Per-agent tool subsets (optimize token usage & security)
 # ────────────────────────────────────────────────
 AGENT_TOOLS = {
-    "architect": architect_tools,      # e.g. search_latest_stack_trends
-    "frontend": frontend_tools,        # e.g. fetch_ui_component_example
-    "backend": backend_tools,          # e.g. validate_api_schema
-    "security": security_tools,        # e.g. vuln_scan, secrets_check
-    "qa": qa_tools,                    # e.g. execute_code_snippet
-    "devops": devops_tools,            # e.g. generate_dockerfile
+    "architect": architect_tools,
+    "frontend": frontend_tools,
+    "backend": backend_tools,
+    "security": security_tools,
+    "qa": qa_tools,
+    "devops": devops_tools,
 }
 
+# ────────────────────────────────────────────────
+# Token Usage Callback Handler
+# ────────────────────────────────────────────────
+class TokenUsageHandler(AsyncCallbackHandler):
+    """Tracks token usage during LLM calls"""
+    def __init__(self):
+        self.total_tokens = 0
+
+    async def on_llm_end(self, response, **kwargs):
+        if hasattr(response, "llm_output") and "token_usage" in response.llm_output:
+            usage = response.llm_output["token_usage"]
+            self.total_tokens += usage.get("total_tokens", 0)
 
 # ────────────────────────────────────────────────
 # Generic Agent Node (with token metering)
@@ -114,7 +126,14 @@ async def agent_node(
 
     # Bind tools (agent-specific subset)
     tools_subset = AGENT_TOOLS.get(agent_type, tools)
-    llm = get_routed_llm(agent_type, tools=tools_subset)
+
+    # Get routed LLM
+    llm = get_routed_llm(
+        agent_type=agent_type,
+        user_tier=state.get("user_tier", "starter"),
+        task_complexity=state.get("task_complexity", "medium"),
+        tools=tools_subset,
+    )
 
     # Build prompt
     prompt_template = ChatPromptTemplate.from_messages([
@@ -126,29 +145,33 @@ async def agent_node(
     if not state["messages"]:
         prompt_template = prompt_template.append(("human", state["prompt"]))
 
-    try:
-        # Invoke LLM
-        response: AIMessage = await llm.ainvoke(prompt_template.format_messages(**state))
+    # Token usage tracking
+    token_handler = TokenUsageHandler()
 
-        # Token usage (Grok returns usage in response)
-        usage = getattr(response, "usage", None)
-        tokens_used = usage.total_tokens if usage else len(response.content) // 4  # Rough estimate fallback
+    try:
+        # Invoke LLM with callback
+        response: AIMessage = await llm.ainvoke(
+            prompt_template.format_messages(**state),
+            config={"callbacks": [token_handler]},
+        )
+
+        # Get accurate token count from callback
+        tokens_used = token_handler.total_tokens or len(response.content) // 4
 
         # Queue metering
         report_grok_usage.delay(
-            user_id=state["user_id"],
+            user_id=state.get("user_id"),
             tokens_used=tokens_used,
             model_name=llm.model,
             request_id=str(uuid4()),
-            timestamp=int(datetime.now(timezone.utc).timestamp()),
         )
 
         # Audit
         audit_log.delay(
-            user_id=state["user_id"],
+            user_id=state.get("user_id"),
             action=f"agent_{agent_type}_executed",
             metadata={
-                "project_id": state["project_id"],
+                "project_id": state.get("project_id"),
                 "tokens": tokens_used,
                 "model": llm.model,
                 "has_tool_calls": bool(response.tool_calls),
@@ -157,35 +180,31 @@ async def agent_node(
 
         # Update state
         updates = {
-            "messages": [response],
+            "messages": state["messages"] + [response],
             "total_tokens_used": state.get("total_tokens_used", 0) + tokens_used,
         }
 
         # Agent-specific state updates (structured parsing)
         if not response.tool_calls:
             content = response.content.strip()
-            if agent_type in ["architect", "security", "qa"]:
-                try:
-                    parsed = json.loads(content)
-                    updates[agent_type] = parsed
-                except json.JSONDecodeError:
-                    updates[agent_type] = content
-            else:
-                updates[f"{agent_type}_code"] = content
+            try:
+                parsed = json.loads(content)
+                updates[agent_type] = parsed
+            except json.JSONDecodeError:
+                updates[f"{agent_type}_raw"] = content
 
         return updates
 
     except Exception as exc:
-        logger.exception(f"Agent {agent_type} failed for project {state['project_id']}")
-        sentry_sdk.capture_exception(exc)
+        logger.exception(f"Agent {agent_type} failed for project {state.get('project_id')}")
         return {
-            "messages": [AIMessage(content=f"Agent {agent_type} failed: {str(exc)}")],
+            "messages": state["messages"] + [AIMessage(content=f"Agent {agent_type} failed: {str(exc)}")],
             "errors": state.get("errors", []) + [f"{agent_type}: {str(exc)}"],
         }
 
 
 # ────────────────────────────────────────────────
-# Specialized Node Wrappers (optional readability)
+# Specialized Node Wrappers (for readability)
 # ────────────────────────────────────────────────
 async def architect_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return await agent_node(state, "architect")
