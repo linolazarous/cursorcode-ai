@@ -29,12 +29,7 @@ class Project(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
     - Supports versioning, RAG memory, rollback
     """
     __tablename__ = "projects"
-    __table_args__ = (
-        Index("ix_projects_user_id_status", "user_id", "status"),
-        Index("ix_projects_org_id", "org_id"),
-        Index("ix_projects_deploy_url", "deploy_url"),
-        {'extend_existing': True},
-    )
+    __table_args__ = {'extend_existing': True}  # ← FINAL FIX: prevents duplicate table error in SQLAlchemy
 
     # Core
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
