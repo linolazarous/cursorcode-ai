@@ -6,6 +6,7 @@ All models inherit from this Base class.
 This file is kept minimal:
 - Defines the abstract Base (never mapped to a table)
 - Provides safe __repr__ / __str__ helpers
+- Global __table_args__ with extend_existing=True to prevent duplicate table errors during import
 - All reusable patterns (timestamps, UUID, soft-delete, audit, slug, etc.) are in db/models/mixins.py and utils.py
 
 Do NOT add table-specific logic or mixins here — keep models clean and modular.
@@ -22,20 +23,19 @@ class Base(DeclarativeBase):
 
     Features:
     - __abstract__ = True → prevents Base from being mapped as a table
-    - Common place for global conventions (schema, future extensions)
+    - Global __table_args__ with extend_existing=True — fixes duplicate table errors when models are imported multiple times (common with aggregators)
     - No automatic table name generation (define __tablename__ explicitly in each model)
     - Safe __repr__ / __str__ helpers for debugging/logs
 
     All concrete models should inherit from Base + mixins from db/models/mixins.py
     """
-
     __abstract__ = True
 
-    # Optional global table args (uncomment when needed for all models)
-    # __table_args__ = {
-    #     "schema": "public",           # if using PostgreSQL schemas
-    #     "extend_existing": True,      # avoid duplicate table errors
-    # }
+    # Global table args for ALL models — prevents duplicate definition errors
+    __table_args__ = {
+        "extend_existing": True,  # ← FINAL FIX: allows re-definition of tables during import
+        # "schema": "public",     # uncomment if using PostgreSQL schemas
+    }
 
     def __repr__(self) -> str:
         """Safe, readable representation (avoids loading large relationships or lazy fields)."""
