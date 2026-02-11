@@ -12,11 +12,9 @@ from sqlalchemy import String, func, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.models import Base  # ← FIXED: use aggregator
+from app.db.models import Base  # ← Aggregator (clean import point)
 from app.db.models.mixins import UUIDMixin, SoftDeleteMixin, AuditMixin, SlugMixin
 from app.db.models.utils import generate_unique_slug
-
-from . import User, Project  # For relationship typing
 
 
 class Org(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin, SlugMixin):
@@ -36,7 +34,7 @@ class Org(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin, SlugMixi
         comment="Display name of the organization"
     )
 
-    # Relationships
+    # Relationships (forward refs via string names — no import needed)
     users: Mapped[List["User"]] = relationship(
         "User",
         back_populates="org",
