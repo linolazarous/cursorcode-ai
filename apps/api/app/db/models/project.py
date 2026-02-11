@@ -13,7 +13,7 @@ from sqlalchemy import ForeignKey, Index, Integer, JSON, String, Text, func, Enu
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin
+from app.db.models import Base  # ← FIXED: use aggregator
 from app.db.models.mixins import UUIDMixin, SoftDeleteMixin, AuditMixin
 from app.db.models.utils import generate_unique_slug
 
@@ -121,5 +121,5 @@ class Project(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
 
     @classmethod
     async def create_unique_slug(cls, title: str, db) -> str:
-        """Generate unique slug for this project based on title."""
+        """Generate unique slug for this project based on title (future use)."""
         return await generate_unique_slug(title, cls, db=db)
