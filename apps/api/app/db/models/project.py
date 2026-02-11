@@ -13,8 +13,8 @@ from sqlalchemy import ForeignKey, Index, Integer, JSON, String, Text, func, Enu
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.models import Base  # ← FIXED: use aggregator
-from app.db.models.mixins import UUIDMixin, SoftDeleteMixin, AuditMixin
+from app.db.models import Base
+from app.db.models.mixins import UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin
 from app.db.models.utils import generate_unique_slug
 
 from . import ProjectStatus  # Enum from same package
@@ -81,12 +81,12 @@ class Project(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
         index=True,
     )
 
-    # Relationships
+    # Relationships (forward refs via string names — no import needed)
     user: Mapped["User"] = relationship("User", back_populates="projects")
     org: Mapped["Org"] = relationship("Org", back_populates="projects")
 
-    # Lifecycle (from SoftDeleteMixin)
-    # deleted_at already inherited
+    # Lifecycle (inherited from SoftDeleteMixin)
+    # deleted_at already present
 
     def __repr__(self) -> str:
         return (
