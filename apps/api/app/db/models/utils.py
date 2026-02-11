@@ -23,36 +23,15 @@ def generate_slug(
 ) -> str:
     """
     Generate URL-safe slug from text (e.g. project title → slug).
-
-    Args:
-        text: Input string (title, name, etc.)
-        max_length: Maximum length of slug (default 100)
-        prefix: Optional prefix (e.g. "proj-")
-        separator: Character between words (default "-")
-
-    Returns:
-        Clean, URL-safe slug (lowercase, hyphens, no special chars)
-
-    Example:
-        generate_slug("Hello World Project!") → "hello-world-project"
-        generate_slug("My Team", prefix="team-") → "team-my-team"
     """
     if not text:
         return ""
 
-    # Normalize unicode → ASCII, remove accents
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
-
-    # Lowercase, replace non-alphanum with separator
     text = re.sub(r"[^a-z0-9]+", separator, text.lower())
-
-    # Strip leading/trailing separators
     text = text.strip(separator)
-
-    # Truncate (leave room for suffix if needed)
     text = text[:max_length]
 
-    # Add prefix if provided
     if prefix:
         text = f"{prefix}{text}"
 
@@ -92,23 +71,6 @@ async def generate_unique_slug(
     """
     Generate a unique slug based on text.
     Appends short random hex suffix if collision occurs.
-
-    Args:
-        text: Base text (e.g. title, name)
-        model_class: SQLAlchemy model class
-        db: Async DB session (required)
-        exclude_id: UUID to exclude (for updates)
-        max_length: Max slug length
-        max_attempts: Max retries before raising error
-        suffix_length: Length of random hex suffix
-        prefix: Optional prefix (e.g. "proj-")
-        separator: Word separator (default "-")
-
-    Returns:
-        Unique slug
-
-    Raises:
-        ValueError if no unique slug found after max_attempts
     """
     base_slug = generate_slug(text, max_length=max_length, prefix=prefix, separator=separator)
 
