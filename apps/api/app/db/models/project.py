@@ -13,11 +13,21 @@ from sqlalchemy import ForeignKey, Index, Integer, JSON, String, Text, func, Enu
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from enum import Enum  # Standard Python enum for ProjectStatus
+
 from app.db.models import Base
 from app.db.models.mixins import UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin
 from app.db.models.utils import generate_unique_slug
 
-from . import ProjectStatus  # Enum from same package
+
+class ProjectStatus(str, Enum):
+    """Project lifecycle states."""
+    PENDING = "pending"
+    BUILDING = "building"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    DEPLOYED = "deployed"
+    MAINTAINING = "maintaining"
 
 
 class Project(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
@@ -29,7 +39,12 @@ class Project(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
     - Supports versioning, RAG memory, rollback
     """
     __tablename__ = "projects"
-    __table_args__ = {'extend_existing': True}  # ← FINAL FIX: prevents duplicate table error in SQLAlchemy
+    __table_args__ = (
+        Index("ix_projects_user_id_status", "user_id", "status"),
+        Index("ix_projects_org_id", "org_id"),
+        Index("ix_projects_deploy_url", "deploy_url"),
+        {'extend_existing': True},
+    )
 
     # Core
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
