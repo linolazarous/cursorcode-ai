@@ -8,7 +8,7 @@ Uses mixins from db/models/mixins.py for reusable patterns.
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Boolean, ForeignKey, JSON, String, Text, func
+from sqlalchemy import Boolean, ForeignKey, JSON, String, Text, func, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,12 +33,11 @@ class Org(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin, SlugMixi
     - Supports teams (multiple users)
     """
     __tablename__ = "orgs"
-    __table_args__ = {'extend_existing': True}  # ← FIXED: prevents duplicate table error
+    __table_args__ = {'extend_existing': True}
 
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     slug: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
 
-    # Relationships (forward refs via string names — no import needed)
     users: Mapped[List["User"]] = relationship(
         "User", back_populates="org", cascade="all, delete-orphan"
     )
@@ -48,7 +47,6 @@ class Org(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin, SlugMixi
 
     @classmethod
     async def create_unique_slug(cls, name: str, db) -> str:
-        """Generate unique slug for this organization."""
         return await generate_unique_slug(name, cls, db=db)
 
     def __repr__(self) -> str:
@@ -63,7 +61,7 @@ class User(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin, SlugMix
     - Full billing, 2FA, verification, reset support
     """
     __tablename__ = "users"
-    __table_args__ = {'extend_existing': True}  # ← FIXED: prevents duplicate table error
+    __table_args__ = {'extend_existing': True}
 
     email: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False, index=True
@@ -127,11 +125,9 @@ class User(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin, SlugMix
 
     @property
     def is_active(self) -> bool:
-        """Account is usable (verified and not deleted)."""
         return self.is_verified and self.deleted_at is None
 
     def check_password(self, password: str) -> bool:
-        """Verify plain password against hashed one."""
         if not self.hashed_password:
             return False
         from argon2 import PasswordHasher
@@ -141,7 +137,6 @@ class User(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin, SlugMix
             return False
 
     def generate_totp_uri(self) -> Optional[str]:
-        """Generate TOTP provisioning URI for authenticator apps."""
         if not self.totp_secret:
             return None
         import pyotp
@@ -152,7 +147,5 @@ class User(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin, SlugMix
 
     @classmethod
     async def create_unique_slug(cls, email: str, db) -> str:
-        """Generate unique slug for this user based on email (future use)."""
-        # Use email prefix before @ as base
         base = email.split("@")[0]
         return await generate_unique_slug(base, cls, db=db)
