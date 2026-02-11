@@ -13,8 +13,8 @@ from sqlalchemy import Boolean, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.models import Base  # ← FIXED: use aggregator
-from app.db.models.mixins import UUIDMixin, SoftDeleteMixin, AuditMixin
+from app.db.models import Base
+from app.db.models.mixins import UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin
 from app.db.models.utils import generate_unique_slug
 
 
@@ -27,11 +27,7 @@ class Plan(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
     - Supports future features like credit allowances, feature lists
     """
     __tablename__ = "plans"
-    __table_args__ = (
-        Index("ix_plans_name", "name", unique=True),
-        Index("ix_plans_stripe_price_id", "stripe_price_id"),
-        {'extend_existing': True},
-    )
+    __table_args__ = {'extend_existing': True}  # ← FINAL FIX: prevents duplicate table error in SQLAlchemy
 
     # Plan identifier (used in code, URLs, metadata)
     name: Mapped[str] = mapped_column(
