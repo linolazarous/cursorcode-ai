@@ -29,11 +29,11 @@ engine: AsyncEngine = create_async_engine(
     str(settings.DATABASE_URL),
     echo=settings.ENVIRONMENT == "development",  # SQL logging only in dev
     future=True,
-    # Pooling tuned for Supabase + serverless platforms
-    pool_pre_ping=True,           # Detect & replace broken connections
-    pool_size=10,                 # Base pool size (Supabase free \~15-20 concurrent ok)
-    max_overflow=5,               # Allow bursts
-    pool_timeout=30,              # Wait time for connection
+    # Pooling tuned for Supabase + serverless platforms (Render/Fly/Railway)
+    pool_pre_ping=True,           # Detect & replace broken/stale connections
+    pool_size=10,                 # Base pool size (Supabase free tier \~15–20 concurrent ok)
+    max_overflow=5,               # Allow bursts during spikes
+    pool_timeout=30,              # Wait time to acquire connection
     pool_recycle=600,             # Recycle every 10 min (helps with Supabase idle timeouts)
     connect_args={
         "ssl": True,              # Supabase requires SSL
@@ -81,12 +81,17 @@ async def init_db():
     """
     try:
         async with engine.connect() as conn:
-            # Simple health check query
             await conn.execute(text("SELECT 1"))
             await conn.commit()
 
         db_type = "Supabase (pooled)" if "supabase" in str(settings.DATABASE_URL).lower() else "PostgreSQL"
         logger.info(f"{db_type} connection verified successfully")
+
+        # Optional: test Redis if used for Celery/rate limiting
+        # from redis.asyncio import Redis
+        # redis = Redis.from_url(settings.REDIS_URL)
+        # await redis.ping()
+        # logger.info("Redis connection verified")
 
     except Exception as e:
         logger.critical("Database connection failed on startup", exc_info=True)
@@ -106,8 +111,11 @@ async def lifespan(app):
     yield  # App runs here
 
     # Graceful shutdown – close all pooled connections
-    await engine.dispose()
-    logger.info("Database engine disposed on shutdown")
+    try:
+        await engine.dispose()
+        logger.info("Database engine disposed on shutdown")
+    except Exception as e:
+        logger.warning(f"Error during DB shutdown: {e}")
 
 
 # ────────────────────────────────────────────────
