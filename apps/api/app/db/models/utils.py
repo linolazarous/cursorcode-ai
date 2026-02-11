@@ -13,7 +13,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
-
 # Strong typing for SQLAlchemy models
 ModelT = TypeVar("ModelT", bound=DeclarativeBase)
 
@@ -26,42 +25,67 @@ def generate_slug(
 ) -> str:
     """
     Generate URL-safe slug from text (e.g. project title → slug).
-    """
 
-    if not text:
+    Args:
+        text: Input string (title, name, etc.)
+        max_length: Maximum length of slug (default 100)
+        prefix: Optional prefix (e.g. "proj-")
+        separator: Character between words (default "-")
+
+    Returns:
+        Clean, URL-safe slug (lowercase, hyphens, no special chars)
+
+    Example:
+        generate_slug("Hello World Project!") → "hello-world-project"
+        generate_slug("My Team", prefix="team-") → "team-my-team"
+    """
+    if not text.strip():
         return ""
 
-    # Normalize unicode → ASCII
+    # Normalize unicode → ASCII, remove accents
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
 
-    # Replace invalid chars
+    # Lowercase, replace non-alphanum with separator
     text = re.sub(r"[^a-z0-9]+", separator, text.lower())
+
+    # Strip leading/trailing separators
     text = text.strip(separator)
 
+    # Truncate (leave room for suffix if needed)
+    text = text[:max_length]
+
+    # Add prefix if provided
     if prefix:
         text = f"{prefix}{text}"
 
-    return text[:max_length]
+    return text
 
 
 async def is_slug_unique(
     slug: str,
     model_class: Type[ModelT],
-    db: AsyncSession,                 # ✅ REQUIRED FIRST
+    db: AsyncSession,
     exclude_id: Optional[str] = None,
 ) -> bool:
     """
     Check if a slug is unique in the given model table.
     Optionally exclude a record ID (for updates).
-    """
 
+    Args:
+        slug: Slug to check
+        model_class: SQLAlchemy model class (e.g. Org, Project)
+        db: Async DB session
+        exclude_id: UUID of record to exclude (for update case)
+
+    Returns:
+        True if slug is unique, False if taken
+    """
     stmt = select(model_class).where(model_class.slug == slug)
 
-    if exclude_id:
+    if exclude_id is not None:
         stmt = stmt.where(model_class.id != exclude_id)
 
     result = await db.execute(stmt)
-
     return result.scalar_one_or_none() is None
 
 
@@ -78,45 +102,49 @@ async def generate_unique_slug(
 ) -> str:
     """
     Generate a unique slug based on text.
-    Appends short random hex suffix if collision occurs.
-    """
+    Appends short random URL-safe suffix if collision occurs.
 
+    Args:
+        text: Base text (e.g. title, name)
+        model_class: SQLAlchemy model class
+        db: Async DB session (required)
+        exclude_id: UUID to exclude (for updates)
+        max_length: Max slug length
+        max_attempts: Max retries before raising error
+        suffix_length: Length of random suffix
+        prefix: Optional prefix (e.g. "proj-")
+        separator: Word separator (default "-")
+
+    Returns:
+        Unique slug
+
+    Raises:
+        ValueError if no unique slug found after max_attempts
+    """
     base_slug = generate_slug(
         text=text,
-        max_length=max_length,
+        max_length=max_length - (suffix_length + 1),  # Reserve space for suffix
         prefix=prefix,
-        separator=separator
+        separator=separator,
     )
 
     # First attempt without suffix
-    if await is_slug_unique(
-        slug=base_slug,
-        model_class=model_class,
-        db=db,
-        exclude_id=exclude_id,
-    ):
+    if await is_slug_unique(slug=base_slug, model_class=model_class, db=db, exclude_id=exclude_id):
         return base_slug
 
     # Retry with suffix
     for _ in range(max_attempts):
-
-        # More efficient than token_hex slicing
         suffix = secrets.token_urlsafe(suffix_length)[:suffix_length]
-
-        candidate = f"{base_slug}-{suffix}"
+        candidate = f"{base_slug}-{suffix}" if base_slug else suffix
 
         if len(candidate) > max_length:
             candidate = candidate[:max_length]
 
-        if await is_slug_unique(
-            slug=candidate,
-            model_class=model_class,
-            db=db,
-            exclude_id=exclude_id,
-        ):
+        if await is_slug_unique(slug=candidate, model_class=model_class, db=db, exclude_id=exclude_id):
             return candidate
 
     raise ValueError(
         f"Could not generate unique slug for '{text}' "
-        f"after {max_attempts} attempts."
+        f"after {max_attempts} attempts. "
+        f"Last tried: '{candidate}'"
     )
