@@ -2,9 +2,9 @@
 """
 Reusable SQLAlchemy mixins for CursorCode AI models.
 These mixins provide common patterns used across entities:
-- UUID primary key
+- UUID primary key (UUIDv4)
 - Automatic timestamps (created_at / updated_at)
-- Soft-delete support
+- Soft-delete support (deleted_at)
 - Audit trail (created_by / updated_by)
 - Slug field (URL-friendly identifier)
 
@@ -23,13 +23,18 @@ from sqlalchemy import String, func, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from zoneinfo import ZoneInfo  # For timezone-aware timestamps
+
 from .base import Base
+
+
+UTC = ZoneInfo("UTC")
 
 
 class UUIDMixin:
     """
     Mixin that uses UUIDv4 as primary key instead of autoincrement int.
-    Recommended default for all models in distributed systems (no conflicts, easier sharding).
+    Recommended default for distributed systems (no conflicts, easier sharding).
     """
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=True),
@@ -45,6 +50,7 @@ class TimestampMixin:
     """
     Mixin that adds automatic created_at / updated_at timestamps.
     Server-side defaults and updates — no Python code needed.
+    Timestamps are UTC-aware.
     """
     created_at: Mapped[datetime] = mapped_column(
         server_default=func.now(),
@@ -78,9 +84,9 @@ class SoftDeleteMixin:
         return self.deleted_at is None
 
     def soft_delete(self) -> None:
-        """Mark record as soft-deleted."""
+        """Mark record as soft-deleted (UTC timestamp)."""
         if self.deleted_at is None:
-            self.deleted_at = datetime.now(timezone.utc)
+            self.deleted_at = datetime.now(UTC)
 
 
 class AuditMixin:
