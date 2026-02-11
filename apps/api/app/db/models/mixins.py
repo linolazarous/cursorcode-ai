@@ -9,7 +9,7 @@ These mixins provide common patterns used across entities:
 - Timestamps (moved from base.py to here for consistency)
 
 Usage example:
-    class MyModel(Base, UUIDMixin, SoftDeleteMixin, AuditMixin, SlugMixin):
+    class MyModel(Base, UUIDMixin, SoftDeleteMixin, AuditMixin):
         ...
 """
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
+from uuid import uuid4  # ← FIXED: import uuid4 here
 
 from sqlalchemy import String, func, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
@@ -33,7 +34,7 @@ class UUIDMixin:
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        default=uuid4,
+        default=uuid4,  # ← Now works
         server_default=func.gen_random_uuid(),
         index=True,
         comment="Unique identifier (UUIDv4)"
