@@ -6,12 +6,12 @@ Uses Resend for email sending (SendGrid migration complete).
 """
 
 from functools import lru_cache
+from typing import Any, List
 
 from pydantic import (
     AnyHttpUrl,
     EmailStr,
     Field,
-    HttpUrl,
     PostgresDsn,
     RedisDsn,
     SecretStr,
@@ -59,7 +59,7 @@ class Settings(BaseSettings):
         return AnyHttpUrl(f"{self.FRONTEND_URL.rstrip('/')}/api")
 
     # Optional – only if needed for legacy frontend links
-    NEXT_PUBLIC_APP_URL: str | None = Field(
+    next_public_app_url: str | None = Field(
         default=None,
         description="Frontend base URL (frontend-only; optional in backend)"
     )
@@ -147,7 +147,7 @@ class Settings(BaseSettings):
     # ────────────────────────────────────────────────
     # CORS
     # ────────────────────────────────────────────────
-    CORS_ORIGINS: list[AnyHttpUrl] = Field(default_factory=list)
+    CORS_ORIGINS: List[AnyHttpUrl] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def compute_cors_origins(self) -> "Settings":
