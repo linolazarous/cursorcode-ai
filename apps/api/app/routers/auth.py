@@ -8,7 +8,7 @@ import logging
 import secrets
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Annotated, Optional  # ← FIXED: added Annotated
 
 import pyotp
 import qrcode
@@ -95,7 +95,7 @@ class TokenResponse(BaseModel):
 class QRResponse(BaseModel):
     qr_code_base64: str
     secret: str
-    backup_codes: list[str]  # ← FIXED: lowercase list (no import needed)
+    backup_codes: list[str]  # lowercase list — correct & no import needed
 
 
 # ────────────────────────────────────────────────
