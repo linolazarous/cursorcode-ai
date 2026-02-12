@@ -5,7 +5,7 @@ Records all significant actions (auth, billing, admin ops, project events, etc.)
 Uses mixins from db/models/mixins.py for reusable patterns.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone  # ← added timezone
 from typing import Dict, Optional
 
 from sqlalchemy import String, Text, func, Index
@@ -26,7 +26,7 @@ class AuditLog(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
     """
 
     __tablename__ = "audit_logs"
-    __table_args__ = {'extend_existing': True}  # ← prevents duplicate table error in SQLAlchemy
+    __table_args__ = {'extend_existing': True}  # prevents duplicate table error in SQLAlchemy
 
     # What happened
     action: Mapped[str] = mapped_column(
@@ -91,4 +91,4 @@ class AuditLog(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin, AuditMixin):
     def soft_delete(self) -> None:
         """Mark entry as deleted (soft delete) — rare use case."""
         if self.deleted_at is None:
-            self.deleted_at = datetime.now(timezone.utc)
+            self.deleted_at = datetime.now(timezone.utc)  # ← recommended UTC-aware assignment
