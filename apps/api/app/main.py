@@ -1,4 +1,3 @@
-# apps/api/app/main.py
 """
 CursorCode AI FastAPI Application Entry Point
 Production-ready (February 2026): middleware stack, lifespan, observability, security.
@@ -16,11 +15,11 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
-from sqlalchemy import insert
+from sqlalchemy import text
 
 from app.core.config import settings
 from app.db.session import lifespan, get_db
-from app.db.models import User, Org, Project, Plan, AuditLog
+from app.db.models import User, Org, Project, Plan, AuditLog  # FIXED: correct import
 from app.routers import (
     auth,
     orgs,
@@ -30,7 +29,6 @@ from app.routers import (
     admin,
     monitoring,
 )
-from app.middleware.auth import get_current_user  # Selective via Depends
 from app.middleware.logging import log_requests_middleware
 from app.middleware.security import add_security_headers
 from app.middleware.rate_limit import (
@@ -61,7 +59,7 @@ app = FastAPI(
     version=settings.APP_VERSION,
     docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
     redoc_url=None,
-    lifespan=lifespan,
+    lifespan=lifespan,  # Handles async DB/Redis init & cleanup
     debug=settings.ENVIRONMENT == "development",
     openapi_tags=[
         {"name": "Authentication", "description": "User auth & sessions"},
@@ -87,11 +85,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. Security Headers (CSP, HSTS, etc.) — using decorator style
+# 2. Security Headers (CSP, HSTS, etc.) — applied to every response
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     response = await call_next(request)
-    add_security_headers(request, response)  # Apply headers to response
+    add_security_headers(request, response)  # Apply headers
     return response
 
 # 3. Request Logging + Prometheus Metrics
@@ -101,7 +99,7 @@ async def metrics_middleware(request: Request, call_next):
     path = request.url.path
     start_time = time.time()
 
-    # Correlation ID
+    # Correlation ID for tracing
     request_id = str(uuid.uuid4())
     request.state.request_id = request_id
 
@@ -119,11 +117,10 @@ async def metrics_middleware(request: Request, call_next):
     return response
 
 # 4. Rate Limiting (Redis + user-aware keys)
+# NOTE: Auth middleware is NOT global — use Depends(get_current_user) in protected routes
 app.add_middleware(RateLimitMiddleware)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
-
-# Custom auth middleware — applied selectively via Depends (not global)
 
 # ────────────────────────────────────────────────
 # Routers
@@ -156,7 +153,10 @@ async def custom_exception_handler(request: Request, exc: Exception):
     - Return user-friendly 500 response
     """
     request_id = getattr(request.state, "request_id", "unknown")
-    user_id = getattr(request.state, "user_id", None)
+    # Note: user_id may not be set if exception happens before auth
+    user_id = getattr(request.state, "user_id", None) or getattr(
+        getattr(request.state, "current_user", None), "id", None
+    )
     path = request.url.path
     method = request.method
 
@@ -221,7 +221,7 @@ async def readiness_check():
     try:
         async with get_db() as db:
             await db.execute(text("SELECT 1"))
-        # Optional Redis check (uncomment if using Redis)
+        # Optional Redis check
         # from redis.asyncio import Redis
         # redis = Redis.from_url(settings.REDIS_URL)
         # await redis.ping()
