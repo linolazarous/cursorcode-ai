@@ -1,4 +1,3 @@
-# apps/api/app/db/session.py
 """
 Database session management for CursorCode AI.
 Async SQLAlchemy engine, session factory, and FastAPI dependency.
@@ -27,19 +26,20 @@ logger = logging.getLogger(__name__)
 # ────────────────────────────────────────────────
 engine: AsyncEngine = create_async_engine(
     str(settings.DATABASE_URL),
-    echo=settings.ENVIRONMENT == "development",          # SQL logging only in dev
+    echo=settings.ENVIRONMENT == "development",  # SQL logging only in dev
     echo_pool="debug" if settings.ENVIRONMENT == "development" else False,
     future=True,
-    # Pooling tuned for Supabase + serverless platforms (Render/Fly/Railway)
+    # Pooling tuned for Supabase + serverless platforms
     pool_pre_ping=True,           # Detect & replace broken/stale connections
-    pool_size=10,                 # Base pool size (Supabase free tier \~15–20 concurrent ok)
+    pool_size=5,                  # Conservative for Supabase free tier (\~15–20 concurrent max)
     max_overflow=5,               # Allow bursts during spikes
     pool_timeout=30,              # Wait time to acquire connection
     pool_recycle=600,             # Recycle every 10 min (helps with Supabase idle timeouts)
     connect_args={
-        "ssl": True,              # Supabase requires SSL
+        # Supabase requires SSL; modern way (more explicit than just ssl=True)
+        "ssl": {"sslmode": "require"} if "supabase" in str(settings.DATABASE_URL).lower() else None,
         "connect_timeout": 15,    # Fail fast on bad connections
-    } if "supabase" in str(settings.DATABASE_URL).lower() else {},
+    },
 )
 
 
@@ -73,12 +73,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 # ────────────────────────────────────────────────
-# Startup: Test connection (called from lifespan)
+# Startup: Test connection + optional Redis ping
 # ────────────────────────────────────────────────
 async def init_db():
     """
-    Run on app startup – verifies connection to Supabase/PostgreSQL.
+    Run on app startup – verifies connection to PostgreSQL/Supabase.
     Logs success or raises critical error.
+    Optional: pings Redis if configured.
     """
     try:
         async with engine.connect() as conn:
@@ -91,14 +92,16 @@ async def init_db():
             extra={"database_url": str(settings.DATABASE_URL)}
         )
 
-        # Optional: test Redis if used for Celery/rate limiting
-        # try:
-        #     from redis.asyncio import Redis
-        #     redis = Redis.from_url(settings.REDIS_URL)
-        #     await redis.ping()
-        #     logger.info("Redis connection verified", extra={"redis_url": settings.REDIS_URL})
-        # except Exception as redis_exc:
-        #     logger.warning("Redis ping failed", exc_info=redis_exc)
+        # Optional Redis check (used for rate limiting, Celery, caching)
+        if settings.REDIS_URL:
+            try:
+                from redis.asyncio import Redis
+                redis = Redis.from_url(str(settings.REDIS_URL))
+                await redis.ping()
+                await redis.aclose()
+                logger.info("Redis connection verified", extra={"redis_url": str(settings.REDIS_URL)})
+            except Exception as redis_exc:
+                logger.warning("Redis ping failed (continuing without)", exc_info=redis_exc)
 
     except Exception as e:
         logger.critical(
@@ -107,6 +110,9 @@ async def init_db():
             extra={"database_url": str(settings.DATABASE_URL)}
         )
         raise RuntimeError("Database unavailable") from e
+    finally:
+        # Ensure any temp resources are cleaned (rare but safe)
+        pass
 
 
 # ────────────────────────────────────────────────
@@ -117,7 +123,7 @@ async def lifespan(app):
     """
     FastAPI lifespan handler – initialize & clean up database connections.
     """
-    await init_db()  # Test connection on startup
+    await init_db()  # Test connection + Redis on startup
 
     yield  # App runs here
 
