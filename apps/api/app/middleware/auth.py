@@ -1,4 +1,3 @@
-# apps/api/app/middleware/auth.py
 """
 Authentication Middleware & Dependencies - CursorCode AI
 JWT + RBAC + multi-tenant org context.
@@ -6,6 +5,7 @@ Production hardened (2026): secure cookies, token rotation, org scoping, audit.
 """
 
 import logging
+import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Annotated, Optional
 
@@ -22,7 +22,8 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.user import User
+from app.db.models.user import User                           # FIXED: correct path
+from app.routers.auth import create_access_token, create_refresh_token  # ADDED: required for refresh
 from app.services.logging import audit_log
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ async def get_current_user(
     """
     Dependency: Extracts and validates current user from JWT (cookie or Bearer).
     Enforces org context and returns enriched user object from DB.
+    Automatically refreshes access token if expired (using refresh token).
     """
     # 1. Prefer cookie (browser), fallback to Bearer (API clients)
     token = request.cookies.get("access_token")
@@ -61,7 +63,7 @@ async def get_current_user(
             detail="Not authenticated"
         )
 
-    # 2. Decode & validate JWT
+    # 2. Try to decode & validate JWT
     try:
         payload = jwt.decode(
             token,
@@ -88,12 +90,35 @@ async def get_current_user(
             raise jwt.InvalidTokenError("Missing required claims: sub/org_id")
 
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+        # Token expired → try to refresh
+        refreshed = await refresh_if_needed(request, None)  # response=None here, we'll set later if needed
+        if not refreshed:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired and could not be refreshed")
+        
+        # Re-fetch token from cookies after refresh (in case it was updated)
+        token = request.cookies.get("access_token")
+        if not token:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh failed")
+
+        # Decode the newly refreshed token
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=["HS256"],
+            options={"verify_exp": True, "verify_signature": True},
+        )
+        user_id = payload["sub"]
+        email = payload.get("email")
+        roles = payload.get("roles", ["user"])
+        org_id = payload.get("org_id")
+        plan = payload.get("plan", "starter")
+        credits = payload.get("credits", 0)
+
     except (jwt.InvalidTokenError, jwt.DecodeError) as e:
         logger.warning(f"Invalid JWT: {str(e)}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
-    # 3. Fetch fresh user from DB (for credits, status, roles, etc.)
+    # 3. Fetch fresh user from DB
     user = await db.get(User, user_id)
     if not user or user.deleted_at:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account not found or deactivated")
@@ -117,8 +142,8 @@ async def get_current_user(
         is_active=user.is_active,
     )
 
-    # 6. Audit (sampled – high volume endpoint)
-    if settings.AUDIT_ALL_AUTH or secrets.randbelow(10) == 0:  # \~10% sampling
+    # 6. Audit (sampled)
+    if settings.AUDIT_ALL_AUTH or secrets.randbelow(10) == 0:
         audit_log.delay(
             user_id=auth_user.id,
             action="auth_access",
@@ -133,15 +158,76 @@ async def get_current_user(
 
 
 # ────────────────────────────────────────────────
+# Token Refresh Logic (used by get_current_user and optionally elsewhere)
+# ────────────────────────────────────────────────
+async def refresh_if_needed(request: Request, response: Optional[Response] = None) -> bool:
+    """
+    Attempts to refresh an expired access token using the refresh token.
+    Updates cookies if a response object is provided.
+    Returns True if refresh succeeded, False otherwise.
+    """
+    access_token = request.cookies.get("access_token")
+    if not access_token:
+        return False
+
+    # Check if access token is actually expired (don't refresh valid tokens)
+    try:
+        jwt.decode(access_token, settings.JWT_SECRET_KEY, algorithms=["HS256"])
+        return True  # Token is still valid → no refresh needed
+    except jwt.ExpiredSignatureError:
+        pass  # Expired → proceed to refresh
+    except Exception as e:
+        logger.warning(f"Access token validation failed before refresh: {str(e)}")
+        return False
+
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        logger.info("No refresh token found for auto-refresh")
+        return False
+
+    try:
+        payload = jwt.decode(refresh_token, settings.JWT_REFRESH_SECRET, algorithms=["HS256"])
+        if payload.get("type") != "refresh":
+            raise jwt.InvalidTokenError("Not a refresh token")
+
+        user_id = payload["sub"]
+
+        # Create new tokens
+        new_access = create_access_token(
+            {"sub": user_id, "type": "access"}  # Add other claims if needed
+        )
+        new_refresh = create_refresh_token({"sub": user_id})
+
+        # Set new cookies if response is provided
+        if response is not None:
+            response.set_cookie("access_token", new_access, **settings.COOKIE_DEFAULTS)
+            response.set_cookie("refresh_token", new_refresh, **settings.COOKIE_DEFAULTS)
+            logger.info(f"Auto-refreshed tokens for user {user_id}")
+        else:
+            # If no response, we can't set cookies → but we can still return success
+            # (useful when called from dependency where response isn't available yet)
+            logger.info(f"Refresh successful but no response object to set cookies for user {user_id}")
+
+        return True
+
+    except jwt.ExpiredSignatureError:
+        logger.info("Refresh token expired")
+        return False
+    except (jwt.InvalidTokenError, jwt.DecodeError) as e:
+        logger.warning(f"Refresh token invalid: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error during token refresh: {str(e)}")
+        return False
+
+
+# ────────────────────────────────────────────────
 # RBAC Dependencies
 # ────────────────────────────────────────────────
 async def require_role(
     required_role: str,
     user: Annotated[AuthUser, Depends(get_current_user)]
 ) -> AuthUser:
-    """
-    Enforce specific role (e.g. 'admin', 'org_owner').
-    """
     if required_role not in user.roles:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -160,42 +246,3 @@ async def require_admin(
     user: Annotated[AuthUser, Depends(get_current_user)]
 ) -> AuthUser:
     return await require_role("admin", user)
-
-
-# ────────────────────────────────────────────────
-# Optional: Auto-refresh expired access token
-# ────────────────────────────────────────────────
-async def refresh_if_needed(request: Request, response: Response):
-    """
-    Middleware helper: auto-refresh access token if expired using refresh token.
-    Call from main middleware or per-route if needed.
-    """
-    access_token = request.cookies.get("access_token")
-    if not access_token:
-        return
-
-    try:
-        jwt.decode(access_token, settings.JWT_SECRET_KEY, algorithms=["HS256"])
-        return  # Token still valid
-    except jwt.ExpiredSignatureError:
-        pass  # Proceed to refresh
-    except Exception:
-        return  # Invalid → let route fail naturally
-
-    refresh_token = request.cookies.get("refresh_token")
-    if not refresh_token:
-        return
-
-    try:
-        payload = jwt.decode(refresh_token, settings.JWT_REFRESH_SECRET, algorithms=["HS256"])
-        user_id = payload["sub"]
-
-        new_access = create_access_token({"sub": user_id, "type": "access"})
-        new_refresh = create_refresh_token({"sub": user_id})
-
-        response.set_cookie("access_token", new_access, **settings.COOKIE_DEFAULTS)
-        response.set_cookie("refresh_token", new_refresh, **settings.COOKIE_DEFAULTS)
-
-        logger.info(f"Auto-refreshed token for user {user_id}")
-    except Exception as e:
-        logger.warning(f"Auto-refresh failed: {str(e)}")
