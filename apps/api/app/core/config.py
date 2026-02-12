@@ -1,4 +1,3 @@
-# apps/api/app/core/config.py
 """
 Central configuration & settings for CursorCode AI API
 Loads from environment variables with strict validation (pydantic-settings v2+).
@@ -7,7 +6,6 @@ Uses Resend for email sending (SendGrid migration complete).
 """
 
 from functools import lru_cache
-from typing import List, Dict, Any, Optional
 
 from pydantic import (
     AnyHttpUrl,
@@ -21,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
     """
@@ -40,11 +39,11 @@ class Settings(BaseSettings):
     # ────────────────────────────────────────────────
     ENVIRONMENT: str = Field(
         ...,
-        pattern="^(development|staging|production)$",
+        pattern=r"^(development|staging|production)$",
         description="Runtime environment"
     )
     APP_VERSION: str = "1.0.0"
-    LOG_LEVEL: str = Field("INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
+    LOG_LEVEL: str = Field("INFO", pattern=r"^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
 
     # ────────────────────────────────────────────────
     # URLs & Domains
@@ -55,23 +54,30 @@ class Settings(BaseSettings):
     )
 
     @property
-    def API_URL(self) -> AnyHttpUrl:
+    def api_url(self) -> AnyHttpUrl:
         """Computed API base URL (derived from FRONTEND_URL)."""
         return AnyHttpUrl(f"{self.FRONTEND_URL.rstrip('/')}/api")
 
     # Optional – only if needed for legacy frontend links
-    NEXT_PUBLIC_APP_URL: Optional[AnyHttpUrl] = Field(
+    NEXT_PUBLIC_APP_URL: str | None = Field(
         default=None,
         description="Frontend base URL (frontend-only; optional in backend)"
     )
 
     # ────────────────────────────────────────────────
-    # Database (Supabase PostgreSQL)
+    # Database (PostgreSQL + asyncpg)
     # ────────────────────────────────────────────────
     DATABASE_URL: PostgresDsn = Field(
         ...,
-        description="Supabase direct PostgreSQL connection string"
+        description="PostgreSQL connection string (asyncpg driver expected)"
     )
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def validate_db_url(cls, v: PostgresDsn) -> PostgresDsn:
+        if not str(v).startswith("postgresql+asyncpg://"):
+            raise ValueError("DATABASE_URL must use asyncpg driver (postgresql+asyncpg://...)")
+        return v
 
     # ────────────────────────────────────────────────
     # Redis (Upstash or self-hosted)
@@ -88,6 +94,9 @@ class Settings(BaseSettings):
     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: str
     STRIPE_WEBHOOK_SECRET: SecretStr
 
+    # Optional: Pin Stripe API version for stability
+    STRIPE_API_VERSION: str | None = Field(default=None)
+
     # ────────────────────────────────────────────────
     # Resend Email
     # ────────────────────────────────────────────────
@@ -98,6 +107,10 @@ class Settings(BaseSettings):
     EMAIL_FROM: EmailStr = Field(
         "no-reply@cursorcode.ai",
         description="Default sender email (must be verified in Resend dashboard)"
+    )
+    EMAIL_FROM_NAME: str = Field(
+        "CursorCode AI",
+        description="Friendly sender name displayed in email clients"
     )
 
     # ────────────────────────────────────────────────
@@ -116,10 +129,17 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(15, ge=1, le=1440)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, ge=1, le=90)
 
-    COOKIE_SECURE: bool = Field(True, description="Set to False in development")
-    COOKIE_DEFAULTS: Dict[str, Any] = Field(default_factory=lambda: {
+    @field_validator("JWT_SECRET_KEY", "JWT_REFRESH_SECRET")
+    @classmethod
+    def validate_jwt_secrets(cls, v: SecretStr) -> SecretStr:
+        if len(v.get_secret_value()) < 32:
+            raise ValueError("JWT secrets must be at least 32 characters long")
+        return v
+
+    COOKIE_SECURE: bool = Field(True, description="Set to False in development only")
+    COOKIE_DEFAULTS: dict[str, Any] = Field(default_factory=lambda: {
         "httponly": True,
-        "secure": True,  # overridden by COOKIE_SECURE in production
+        "secure": True,          # overridden by COOKIE_SECURE in production
         "samesite": "strict",
         "path": "/",
     })
@@ -127,10 +147,10 @@ class Settings(BaseSettings):
     # ────────────────────────────────────────────────
     # CORS
     # ────────────────────────────────────────────────
-    CORS_ORIGINS: List[AnyHttpUrl] = Field(default_factory=list)
+    CORS_ORIGINS: list[AnyHttpUrl] = Field(default_factory=list)
 
-    @model_validator(mode='after')
-    def compute_cors_origins(self) -> 'Settings':
+    @model_validator(mode="after")
+    def compute_cors_origins(self) -> "Settings":
         """Auto-populate CORS_ORIGINS from FRONTEND_URL if empty."""
         if not self.CORS_ORIGINS:
             self.CORS_ORIGINS = [self.FRONTEND_URL]
@@ -155,7 +175,7 @@ class Settings(BaseSettings):
     def is_dev(self) -> bool:
         return self.ENVIRONMENT == "development"
 
-    def get_cookie_options(self, max_age: int = None) -> Dict[str, Any]:
+    def get_cookie_options(self, max_age: int | None = None) -> dict[str, Any]:
         """Get secure cookie options, adjusted for environment."""
         opts = self.COOKIE_DEFAULTS.copy()
         opts["secure"] = self.COOKIE_SECURE and self.is_production
