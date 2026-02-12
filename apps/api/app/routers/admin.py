@@ -1,4 +1,3 @@
-# apps/api/app/routers/admin.py
 """
 Admin Router - CursorCode AI
 Protected endpoints for platform administrators only.
@@ -8,7 +7,7 @@ Statistics, user management, subscriptions, failed builds, maintenance, error lo
 
 import logging
 from datetime import datetime, timedelta
-from typing import Annotated, List, Dict, Any, Optional
+from typing import Annotated, Optional, Dict, Any
 from zoneinfo import ZoneInfo
 
 from fastapi import (
@@ -27,9 +26,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.session import get_db
 from app.middleware.auth import get_current_user, require_admin, AuthUser
-from app.models.user import User
-from app.models.org import Org
-from app.models.project import Project, ProjectStatus
+from app.db.models.user import User          # ← FIXED: correct path
+from app.db.models.org import Org            # ← FIXED: correct path
+from app.db.models.project import Project, ProjectStatus  # ← FIXED: correct path
 from app.services.billing import refund_credits
 from app.services.logging import audit_log
 from app.tasks.email import send_email_task
