@@ -1,4 +1,3 @@
-# apps/api/app/routers/orgs.py
 """
 Organizations Router - CursorCode AI
 Manages organizations (tenants): CRUD + switching.
@@ -8,7 +7,7 @@ Only org_owners/admins can manage their org.
 
 import logging
 from datetime import datetime
-from typing import List, Annotated, Optional, Dict
+from typing import Annotated, Optional, Dict
 from uuid import UUID
 
 from fastapi import (
@@ -29,8 +28,8 @@ from slowapi.util import get_remote_address
 from app.core.config import settings
 from app.db.session import get_db
 from app.middleware.auth import get_current_user, AuthUser, require_org_owner
-from app.models.user import User
-from app.models.org import Org
+from app.db.models.user import User      # ← FIXED: correct path
+from app.db.models.org import Org        # ← FIXED: correct path
 from app.services.logging import audit_log
 
 logger = logging.getLogger(__name__)
@@ -137,7 +136,7 @@ async def create_org(
 
 @router.get(
     "/",
-    response_model=List[OrgOut],
+    response_model=list[OrgOut],  # ← modern list instead of List
     summary="List organizations current user belongs to",
 )
 async def list_orgs(
@@ -154,16 +153,16 @@ async def list_orgs(
         .order_by(Org.name)
     )
     result = await db.execute(stmt)
-    orgs = result.scalars().all()
+    orgs_list = result.scalars().all()
 
     # Efficiently compute member counts
-    for org in orgs:
+    for org in orgs_list:
         count_stmt = select(func.count(User.id)).where(User.org_id == org.id)
         count = await db.scalar(count_stmt)
         org.member_count = count or 0
         org.is_active = str(org.id) == current_user.org_id
 
-    return orgs
+    return orgs_list
 
 
 @router.get(
