@@ -1,4 +1,3 @@
-# apps/api/app/middleware/rate_limit.py
 """
 Rate Limiting Middleware & Helpers – CursorCode AI
 Production-grade global + per-route rate limiting using slowapi + Redis.
@@ -6,9 +5,11 @@ Production-grade global + per-route rate limiting using slowapi + Redis.
 """
 
 import logging
-from typing import Callable, Awaitable
+import secrets
+from typing import Optional
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, status
+from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -16,6 +17,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.core.config import settings
 from app.services.logging import audit_log
+from app.middleware.auth import AuthUser  # for type hint & admin check
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +41,9 @@ def get_user_or_ip_key(request: Request) -> str:
     Rate limit by authenticated user ID if present, otherwise by IP.
     Prevents shared-IP abuse (e.g. corporate networks, mobile carriers).
     """
-    user_id = getattr(request.state, "user_id", None)
-    if user_id:
-        return f"user:{user_id}"
+    user = getattr(request.state, "current_user", None)
+    if isinstance(user, AuthUser) and user.id:
+        return f"user:{user.id}"
     return f"ip:{get_remote_address(request)}"
 
 
@@ -51,7 +53,7 @@ def get_admin_bypass_key(request: Request) -> str:
     Useful for debugging, monitoring tools, or admin dashboards.
     """
     user = getattr(request.state, "current_user", None)
-    if user and "admin" in getattr(user, "roles", []):
+    if isinstance(user, AuthUser) and "admin" in user.roles:
         return "admin_bypass"
     return get_user_or_ip_key(request)
 
@@ -60,16 +62,11 @@ def get_admin_bypass_key(request: Request) -> str:
 # Custom middleware to attach limiter & user context
 # ────────────────────────────────────────────────
 class RateLimitMiddleware(SlowAPIMiddleware):
-    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    async def dispatch(self, request: Request, call_next):
         # Attach limiter to request state (for per-route use)
         request.state.limiter = limiter
 
-        # Attach current_user.id if auth middleware ran before
-        # (auth middleware should be added before rate-limit middleware)
-        user = getattr(request.state, "current_user", None)
-        if user and hasattr(user, "id"):
-            request.state.user_id = user.id
-
+        # Let auth middleware run first (sets current_user)
         response = await call_next(request)
         return response
 
@@ -77,11 +74,12 @@ class RateLimitMiddleware(SlowAPIMiddleware):
 # ────────────────────────────────────────────────
 # Custom exception handler for rate limit exceeded
 # ────────────────────────────────────────────────
-def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     """
     Handles 429 responses with Retry-After header and audit log.
     """
-    user_id = getattr(request.state, "user_id", None)
+    user = getattr(request.state, "current_user", None)
+    user_id = user.id if isinstance(user, AuthUser) else None
     ip = get_remote_address(request)
 
     # Audit (sampled – avoid flooding in high-abuse scenarios)
@@ -98,15 +96,17 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
             }
         )
 
+    headers = {}
+    if hasattr(exc, "retry_after"):
+        headers["Retry-After"] = str(exc.retry_after)
+
     return JSONResponse(
-        status_code=429,
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         content={
             "detail": "Rate limit exceeded. Please try again later.",
             "retry_after": exc.retry_after if hasattr(exc, "retry_after") else 60
         },
-        headers={
-            "Retry-After": str(exc.retry_after) if hasattr(exc, "retry_after") else "60"
-        }
+        headers=headers
     )
 
 
@@ -116,18 +116,20 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
 """
 In apps/api/app/main.py (after creating app = FastAPI(...)):
 
+from app.middleware.rate_limit import limiter, rate_limit_exceeded_handler, RateLimitMiddleware
+
 # Attach limiter globally
 app.state.limiter = limiter
 
 # Add custom exception handler
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
-# Add middleware (after auth middleware!)
+# Add middleware AFTER auth middleware!
 app.add_middleware(RateLimitMiddleware)
 
-# Example per-route limiting (uses get_user_or_ip_key by default)
+# Example per-route limiting
 @router.post("/projects")
-@limiter.limit("3/minute")  # per user or IP
+@limiter.limit("3/minute", key_func=get_user_or_ip_key)
 async def create_project(...):
     ...
 
@@ -136,29 +138,4 @@ async def create_project(...):
 @limiter.limit("30/minute", key_func=get_admin_bypass_key)
 async def admin_stats(...):
     ...
-"""
-
-# ────────────────────────────────────────────────
-# Recommended per-route limiting patterns
-# ────────────────────────────────────────────────
-"""
-# High-security / brute-force sensitive (login, 2FA, reset)
-@router.post("/auth/login")
-@limiter.limit("5/minute;ip")               # strict per-IP
-async def login(...): ...
-
-# Credit-consuming / expensive actions
-@router.post("/projects")
-@limiter.limit("3/minute")                  # per-user (default key_func)
-async def create_project(...): ...
-
-# Admin/debug endpoints – high limit + admin bypass
-@router.get("/admin/stats")
-@limiter.limit("30/minute", key_func=get_admin_bypass_key)
-async def admin_stats(...): ...
-
-# Very high-traffic public endpoints (if any)
-@router.get("/public/health")
-@limiter.limit("500/minute;ip")
-async def health(...): ...
 """
