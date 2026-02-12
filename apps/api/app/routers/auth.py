@@ -95,7 +95,8 @@ class TokenResponse(BaseModel):
 class QRResponse(BaseModel):
     qr_code_base64: str
     secret: str
-    backup_codes: List[str]
+    backup_codes: list[str]  # ← FIXED: lowercase list (no import needed)
+
 
 # ────────────────────────────────────────────────
 # Signup - Heavily rate-limited
