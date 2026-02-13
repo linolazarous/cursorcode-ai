@@ -11,25 +11,15 @@ import uuid
 import hashlib
 from typing import Dict, Any
 
-from fastapi import (
-    APIRouter,
-    Request,
-    HTTPException,
-    status,
-    BackgroundTasks,
-    Depends,  # ← FIXED: added missing import
-)
+from fastapi import APIRouter, Request, HTTPException, status, BackgroundTasks
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from stripe.error import SignatureVerificationError, StripeError
 import stripe
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import insert
-from redis.asyncio import Redis
-from cryptography.fernet import Fernet, InvalidToken
 
 from app.core.config import settings
-from app.db.session import get_db
+from app.core.deps import DBSession  # ← Centralized DB dependency
 from app.tasks.billing import (
     handle_checkout_session_completed_task,
     handle_invoice_paid_task,
@@ -68,7 +58,7 @@ limiter = Limiter(key_func=lambda r: r.client.host)
 async def stripe_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
+    db: DBSession,  # ← Now uses centralized dependency from deps.py
 ):
     """
     Main Stripe webhook handler.
@@ -197,7 +187,7 @@ async def stripe_webhook(
 # ────────────────────────────────────────────────
 # Helper: Log error to Supabase 'app_errors' table (custom monitoring)
 # ────────────────────────────────────────────────
-async def _log_error_to_db(db: AsyncSession, request_id: str, message: str, stack: str | None = None):
+async def _log_error_to_db(db: DBSession, request_id: str, message: str, stack: str | None = None):
     try:
         await db.execute(
             insert("app_errors").values(
