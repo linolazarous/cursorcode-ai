@@ -2,6 +2,16 @@
 app/core/deps.py
 Centralized FastAPI dependencies for CursorCode AI API.
 All reusable dependencies (db session, current user, admin checks, etc.) are defined here.
+
+Usage:
+    from app.core.deps import DBSession, CurrentUser, CurrentAdminUser
+
+    @router.get("/users/me")
+    async def read_users_me(
+        current_user: CurrentUser,
+        db: DBSession,
+    ):
+        ...
 """
 
 from typing import Annotated, Optional
@@ -34,6 +44,12 @@ CurrentAdminUser = Annotated[AuthUser, Depends(require_admin)]
 
 # Current user must be org owner
 CurrentOrgOwnerUser = Annotated[AuthUser, Depends(require_org_owner)]
+
+# Current user must be admin OR org owner (composed)
+AdminOrOrgOwnerUser = Annotated[
+    AuthUser,
+    Depends(lambda: require_admin() or require_org_owner())
+]
 
 # Optional current user (for public endpoints that still want context if logged in)
 OptionalCurrentUser = Annotated[Optional[AuthUser], Depends(get_current_user)]
@@ -82,17 +98,18 @@ def require_authenticated_user(current_user: CurrentUser) -> AuthUser:
 
 
 # ────────────────────────────────────────────────
-# Example usage in a router (especially admin.py)
+# Example usage in routers
 # ────────────────────────────────────────────────
 """
+# In admin.py or monitoring.py:
 from app.core.deps import DBSession, CurrentAdminUser, OptionalCurrentUser
 
-@router.get("/users/me")
-async def read_users_me(
-    current_user: CurrentUser,
+@router.get("/stats/overview")
+async def get_stats(
+    current_user: CurrentAdminUser,
     db: DBSession,
 ):
-    return current_user
+    ...
 
 @router.post("/monitoring/frontend-error")
 async def log_frontend_error(
