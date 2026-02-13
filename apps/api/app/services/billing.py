@@ -1,4 +1,3 @@
-# apps/api/app/services/billing.py
 """
 Billing Service - CursorCode AI
 Handles credit metering, Stripe integration, plan changes, and usage reporting.
@@ -7,6 +6,7 @@ Uses dynamic Stripe Product + Price from 'plans' table (no manual IDs).
 """
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Tuple
 
@@ -45,8 +45,8 @@ async def get_or_create_stripe_price(
             price = stripe.Price.retrieve(plan.stripe_price_id)
             if price.unit_amount == plan.price_usd_cents:
                 return plan.stripe_price_id
-        except stripe.error.InvalidRequestError:
-            logger.warning(f"Stored price ID invalid for {plan_name} – recreating")
+        except stripe.error.InvalidRequestError as e:
+            logger.warning(f"Stored price ID invalid for {plan_name} – recreating: {e}")
 
     try:
         # Create Product
@@ -78,6 +78,11 @@ async def get_or_create_stripe_price(
 
     except stripe.error.StripeError as e:
         logger.error(f"Stripe price creation failed for {plan_name}: {e}")
+        await audit_log.delay(
+            user_id=None,
+            action="stripe_price_creation_failed",
+            metadata={"plan_name": plan_name, "error": str(e)}
+        )
         raise RuntimeError(f"Failed to create billing plan: {str(e.user_message or e)}")
 
 
@@ -126,18 +131,20 @@ async def deduct_credits(
             },
         )
 
-        # Low credits alert (email)
+        # Low credits alert (email) - use real user email
         if new_credits <= 5:
-            send_email_task.delay(
-                to="user_email_placeholder",  # Resolve via user query if needed
-                subject="Low Credits Alert - CursorCode AI",
-                html=f"""
-                <h2>Low Credits Warning</h2>
-                <p>Your credit balance is now {new_credits}.</p>
-                <p>Top up soon to continue using AI features!</p>
-                <p><a href="{settings.FRONTEND_URL}/billing">Add Credits</a></p>
-                """
-            )
+            user = await db.get(User, user_id)
+            if user and user.email:
+                send_email_task.delay(
+                    to=user.email,
+                    subject="Low Credits Alert - CursorCode AI",
+                    html=f"""
+                    <h2>Low Credits Warning</h2>
+                    <p>Your credit balance is now {new_credits}.</p>
+                    <p>Top up soon to continue using AI features!</p>
+                    <p><a href="{settings.FRONTEND_URL}/billing">Add Credits</a></p>
+                    """
+                )
 
         return True, f"Deducted {amount} credits. New balance: {new_credits}"
 
@@ -213,8 +220,8 @@ async def create_or_get_stripe_customer(
             customer = stripe.Customer.retrieve(user.stripe_customer_id)
             if customer.email == user.email:
                 return user.stripe_customer_id
-        except stripe.error.InvalidRequestError:
-            logger.warning(f"Stored customer ID invalid for user {user.id} – recreating")
+        except stripe.error.InvalidRequestError as e:
+            logger.warning(f"Stored customer ID invalid for user {user.id} – recreating: {e}")
 
     customer = stripe.Customer.create(
         email=user.email,
@@ -323,5 +330,15 @@ async def report_usage(
 
     except StripeError as e:
         logger.error(f"Stripe usage report failed for user {user_id}: {e}")
+        await audit_log.delay(
+            user_id=user_id,
+            action="usage_report_failed",
+            metadata={"error": str(e)}
+        )
     except Exception as e:
         logger.exception(f"Usage reporting failed for user {user_id}")
+        await audit_log.delay(
+            user_id=user_id,
+            action="usage_report_failed",
+            metadata={"error": str(e)}
+        )
