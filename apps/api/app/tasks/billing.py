@@ -17,7 +17,6 @@ from app.services.logging import audit_log
 from app.services.email import (
     send_email,
     send_low_credits_alert,
-    send_subscription_status_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,7 +81,7 @@ def handle_checkout_session_completed_task(
             metadata=metadata
         )
 
-        # Welcome email
+        # Welcome email using generic send_email
         send_email(
             to=user.email,
             subject="Welcome to CursorCode AI – Subscription Active!",
@@ -150,7 +149,7 @@ def handle_invoice_paid_task(
             metadata=metadata
         )
 
-        # Optional: notify on renewal
+        # Renewal notification using generic send_email
         send_email(
             to=user.email,
             subject="Subscription Renewed – Credits Added!",
@@ -210,7 +209,7 @@ def handle_invoice_payment_failed_task(
             metadata=metadata
         )
 
-        # Dunning email
+        # Dunning email using generic send_email
         send_email(
             to=user.email,
             subject=f"Payment Failed – Action Required (Attempt {attempt_count})",
@@ -273,7 +272,7 @@ def handle_subscription_updated_task(
             metadata=metadata
         )
 
-        # Notify on important changes
+        # Notify on important changes using generic send_email
         if new_status in ["past_due", "canceled", "unpaid"]:
             send_email(
                 to=user.email,
