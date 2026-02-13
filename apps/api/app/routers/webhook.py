@@ -2,6 +2,7 @@
 Stripe Webhook Router - CursorCode AI
 Production-hardened endpoint for all Stripe events (subscriptions, invoices, payments).
 February 13, 2026 standards: idempotency, encryption, queuing, observability, security.
+Uses custom monitoring (structured logging + Supabase app_errors table) instead of Sentry.
 """
 
 import logging
@@ -16,8 +17,8 @@ from slowapi import Limiter
 from stripe.error import SignatureVerificationError, StripeError
 import stripe
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import insert
 from redis.asyncio import Redis
-import sentry_sdk
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.core.config import settings
@@ -68,14 +69,11 @@ async def stripe_webhook(
     - Checks idempotency (Redis)
     - Stores encrypted payload for debugging (short TTL)
     - Queues async event processing (non-blocking)
+    - Logs structured error + stores in Supabase 'app_errors' table on failure
     - Always returns 200 immediately (Stripe requirement)
     """
     request_id = str(uuid.uuid4())
     start_time = time.time()
-
-    # Sentry context
-    sentry_sdk.set_tag("request_id", request_id)
-    sentry_sdk.set_tag("webhook_source", "stripe")
 
     # ────────────────────────────────────────────────
     # 1. Read raw payload & signature
@@ -85,7 +83,7 @@ async def stripe_webhook(
 
     if not sig_header:
         logger.error(f"[{request_id}] Missing stripe-signature header")
-        sentry_sdk.capture_message("Webhook: Missing signature header", level="error")
+        await _log_error_to_db(db, request_id, "Missing stripe-signature header", None)
         raise HTTPException(status_code=400, detail="Missing signature")
 
     # ────────────────────────────────────────────────
@@ -100,16 +98,15 @@ async def stripe_webhook(
         )
     except ValueError as e:
         logger.error(f"[{request_id}] Invalid payload: {e}")
-        sentry_sdk.capture_exception(e)
+        await _log_error_to_db(db, request_id, f"Invalid payload: {str(e)}", str(e))
         raise HTTPException(status_code=400, detail="Invalid payload")
     except SignatureVerificationError as e:
         logger.error(f"[{request_id}] Invalid signature: {e}")
-        sentry_sdk.capture_exception(e)
+        await _log_error_to_db(db, request_id, f"Invalid signature: {str(e)}", str(e))
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     event_id = event["id"]
     event_type = event["type"]
-    sentry_sdk.set_tag("webhook_event", event_type)
 
     # ────────────────────────────────────────────────
     # 3. Idempotency check (Redis)
@@ -131,6 +128,7 @@ async def stripe_webhook(
         logger.debug(f"[{request_id}] Debug payload stored (encrypted)")
     except InvalidToken as e:
         logger.error(f"[{request_id}] Fernet encryption failed: {e}")
+        await _log_error_to_db(db, request_id, f"Fernet encryption failed: {str(e)}", str(e))
 
     # ────────────────────────────────────────────────
     # 5. Queue async processing (non-blocking)
@@ -168,21 +166,47 @@ async def stripe_webhook(
 
         except Exception as exc:
             logger.exception(f"[{request_id}] Failed to process webhook event {event_type}")
-            sentry_sdk.capture_exception(exc)
+            await _log_error_to_db(db, request_id, f"Webhook processing failed for {event_type}", str(exc))
 
     background_tasks.add_task(process_event)
 
     # ────────────────────────────────────────────────
-    # 6. Performance monitoring
+    # 6. Performance monitoring (custom)
     # ────────────────────────────────────────────────
     duration = time.time() - start_time
     if duration > 2.5:  # Stripe timeout = 5s → alert early
-        sentry_sdk.capture_message(
+        logger.warning(
             f"[{request_id}] Slow webhook processing: {duration:.2f}s for {event_type}",
-            level="warning"
+            extra={"duration_seconds": duration, "event_type": event_type}
         )
+        await _log_error_to_db(db, request_id, f"Slow webhook processing: {duration:.2f}s", None)
 
     return JSONResponse(
         content={"status": "received", "request_id": request_id},
         headers={"X-Request-ID": request_id}
     )
+
+
+# ────────────────────────────────────────────────
+# Helper: Log error to Supabase 'app_errors' table (custom monitoring)
+# ────────────────────────────────────────────────
+async def _log_error_to_db(db: AsyncSession, request_id: str, message: str, stack: str | None = None):
+    try:
+        await db.execute(
+            insert("app_errors").values(
+                level="webhook_error",
+                message=message,
+                stack=stack,
+                user_id=None,  # webhook events are system-level
+                request_path="/webhook/stripe",
+                request_method="POST",
+                environment=settings.ENVIRONMENT,
+                extra={
+                    "request_id": request_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        )
+        await db.commit()
+    except Exception as db_exc:
+        logger.error(f"[{request_id}] Failed to log webhook error to DB: {db_exc}")
