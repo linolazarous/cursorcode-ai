@@ -24,11 +24,10 @@ from sqlalchemy import select, func, desc, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.session import get_db
-from app.middleware.auth import get_current_user, require_admin, AuthUser
-from app.db.models.user import User          # ← FIXED: correct path
-from app.db.models.org import Org            # ← FIXED: correct path
-from app.db.models.project import Project, ProjectStatus  # ← FIXED: correct path
+from app.core.deps import DBSession, CurrentAdminUser, OptionalCurrentUser  # ← use centralized deps
+from app.db.models.user import User
+from app.db.models.org import Org
+from app.db.models.project import Project, ProjectStatus
 from app.services.billing import refund_credits
 from app.services.logging import audit_log
 from app.tasks.email import send_email_task
@@ -64,8 +63,8 @@ class AdminStatsOverview(BaseModel):
 # ────────────────────────────────────────────────
 @router.get("/stats/overview", response_model=AdminStatsOverview)
 async def get_platform_overview_stats(
-    current_user: Annotated[AuthUser, Depends(require_admin)],
-    db: AsyncSession = Depends(get_db),
+    current_user: CurrentAdminUser,
+    db: DBSession,
     lookback_days: int = Query(30, ge=1, le=365, description="Lookback period in days"),
 ):
     """
@@ -101,7 +100,7 @@ async def get_platform_overview_stats(
         "failure_rate_pct": round(failed_projects / total_projects * 100, 1) if total_projects > 0 else 0.0,
     }
 
-    # Subscriptions (assuming User has plan/subscription_status)
+    # Subscriptions
     stats["subscriptions"] = {
         "total_active": await db.scalar(select(func.count(User.id)).where(User.subscription_status == "active")),
         "by_plan": {
@@ -125,8 +124,8 @@ async def get_platform_overview_stats(
 # ────────────────────────────────────────────────
 @router.get("/users/recent")
 async def get_recent_users(
-    current_user: Annotated[AuthUser, Depends(require_admin)],
-    db: AsyncSession = Depends(get_db),
+    current_user: CurrentAdminUser,
+    db: DBSession,
     limit: int = Query(20, ge=5, le=100),
     offset: int = Query(0, ge=0),
     search: Optional[str] = Query(None, description="Email or name partial match"),
@@ -165,8 +164,8 @@ async def get_recent_users(
 # ────────────────────────────────────────────────
 @router.get("/subscriptions/active")
 async def get_active_subscriptions(
-    current_user: Annotated[AuthUser, Depends(require_admin)],
-    db: AsyncSession = Depends(get_db),
+    current_user: CurrentAdminUser,
+    db: DBSession,
     plan_filter: Optional[str] = Query(None, description="Filter by plan type"),
     status_filter: str = Query("active", description="Subscription status filter"),
     limit: int = Query(20, ge=5, le=100),
@@ -204,8 +203,8 @@ async def get_active_subscriptions(
 # ────────────────────────────────────────────────
 @router.get("/projects/failed")
 async def get_failed_projects(
-    current_user: Annotated[AuthUser, Depends(require_admin)],
-    db: AsyncSession = Depends(get_db),
+    current_user: CurrentAdminUser,
+    db: DBSession,
     days: int = Query(7, ge=1, le=90, description="Lookback days"),
     limit: int = Query(20, ge=5, le=100),
     offset: int = Query(0, ge=0),
@@ -248,8 +247,8 @@ async def get_failed_projects(
 async def adjust_user_credits(
     user_id: str,
     payload: CreditAdjust = Body(...),
-    current_user: Annotated[AuthUser, Depends(require_admin)],
-    db: AsyncSession = Depends(get_db),
+    current_user: CurrentAdminUser,
+    db: DBSession,
 ):
     """
     Manually adjust a user's credit balance (admin tool).
@@ -296,7 +295,7 @@ async def adjust_user_credits(
 @router.post("/maintenance")
 async def toggle_maintenance_mode(
     payload: MaintenanceToggle = Body(...),
-    current_user: Annotated[AuthUser, Depends(require_admin)],
+    current_user: CurrentAdminUser,
 ):
     """
     Toggle global maintenance mode.
@@ -304,8 +303,9 @@ async def toggle_maintenance_mode(
     """
     # TODO: Store in Redis or Supabase config table
     # Example Redis:
-    # await redis_client.set("maintenance:enabled", "1" if payload.enabled else "0", ex=86400*7)
-    # await redis_client.set("maintenance:message", payload.message, ex=86400*7)
+    # async with get_redis_client() as redis:
+    #     await redis.set("maintenance:enabled", "1" if payload.enabled else "0", ex=86400*7)
+    #     await redis.set("maintenance:message", payload.message, ex=86400*7)
 
     audit_log.delay(
         user_id=current_user.id,
@@ -326,9 +326,10 @@ async def toggle_maintenance_mode(
 # ────────────────────────────────────────────────
 @router.post("/monitoring/frontend-error")
 async def log_frontend_error(
+    request: Request,  # ← added for IP logging
     data: Dict[str, Any] = Body(...),
-    current_user: Annotated[Optional[AuthUser], Depends(get_current_user)] = None,
-    db: AsyncSession = Depends(get_db),
+    current_user: OptionalCurrentUser = None,  # optional
+    db: DBSession,
 ):
     """
     Endpoint for frontend to report JavaScript/runtime errors.
@@ -348,7 +349,7 @@ async def log_frontend_error(
                     "user_agent": data.get("userAgent"),
                     "source": data.get("source"),
                     "timestamp": data.get("timestamp"),
-                    "ip": request.client.host if request else None,
+                    "ip": request.client.host,
                     **data,
                 },
             )
