@@ -1,10 +1,7 @@
 """
 Monitoring Router - CursorCode AI
 Endpoints for logging and observability.
-- Receives frontend errors from Next.js (JavaScript/runtime errors)
-- Stores in Supabase 'app_errors' table (consistent with backend exceptions)
-- Exposes Prometheus metrics (handled in main.py)
-Production-ready (February 2026): structured logging, rate limiting, audit trail.
+Frontend error reporting, health checks.
 """
 
 import logging
@@ -35,23 +32,23 @@ limiter = Limiter(key_func=get_user_id_or_ip)
 
 
 # ────────────────────────────────────────────────
-# Incoming payload validation
+# Payload validation
 # ────────────────────────────────────────────────
 class FrontendErrorPayload(BaseModel):
     message: str = Field(..., min_length=1, description="Error message")
     stack: Optional[str] = Field(None, description="Stack trace")
-    url: Optional[str] = Field(None, description="Page URL where error occurred")
-    component: Optional[str] = Field(None, description="React/Vue/Svelte component name")
+    url: Optional[str] = Field(None, description="Page URL")
+    component: Optional[str] = Field(None, description="Component name")
     userAgent: Optional[str] = Field(None, description="Browser user agent")
     source: Optional[str] = Field(None, description="Error source file/line")
-    timestamp: Optional[str] = Field(None, description="Client-side timestamp")
+    timestamp: Optional[str] = Field(None, description="Client timestamp")
 
 
 # ────────────────────────────────────────────────
 # Log Frontend Error (called from Next.js)
 # ────────────────────────────────────────────────
 @router.post("/log-error", status_code=status.HTTP_200_OK)
-@limiter.limit("20/minute")  # Reasonable for frontend error bursts
+@limiter.limit("20/minute")
 async def log_frontend_error(
     request: Request,
     payload: FrontendErrorPayload = Body(...),
@@ -59,11 +56,9 @@ async def log_frontend_error(
     db: DBSession,
 ):
     """
-    Receives frontend JavaScript/runtime errors from Next.js.
-    - Logs structured error with context
-    - Stores in Supabase 'app_errors' table
-    - Audits the event
-    - Returns 200 even on DB failure (frontend should not retry)
+    Receives frontend JS/runtime errors from Next.js.
+    Stores in Supabase 'app_errors' table.
+    Returns 200 even on failure (frontend should not retry).
     """
     message = payload.message
     url = payload.url
@@ -75,14 +70,14 @@ async def log_frontend_error(
     user_id = current_user.id if current_user else None
     ip = request.client.host
 
-    # Structured logging (structlog-friendly)
+    # Structured logging
     logger.error(
         "Frontend error received",
         extra={
             "message": message,
             "url": url,
             "component": component,
-            "stack": stack[:1000] if stack else None,  # truncate long stacks
+            "stack": stack[:1000] if stack else None,
             "user_agent": user_agent,
             "source": source,
             "user_id": user_id,
@@ -93,7 +88,7 @@ async def log_frontend_error(
         }
     )
 
-    # Store in Supabase 'app_errors' table
+    # Store in DB
     try:
         await db.execute(
             insert("app_errors").values(
@@ -118,12 +113,12 @@ async def log_frontend_error(
     except Exception as db_exc:
         logger.error(f"Failed to store frontend error in DB: {db_exc}")
 
-    # Audit log (queued)
+    # Audit log
     audit_log.delay(
         user_id=user_id,
         action="frontend_error_logged",
         metadata={
-            "message": message[:200],  # truncate for audit
+            "message": message[:200],
             "url": url,
             "component": component,
             "user_agent": user_agent,
@@ -137,13 +132,10 @@ async def log_frontend_error(
 
 
 # ────────────────────────────────────────────────
-# Health check (public, no auth)
+# Health check (public)
 # ────────────────────────────────────────────────
 @router.get("/health")
 async def monitoring_health():
-    """
-    Public health check for monitoring tools (Prometheus, UptimeRobot, etc.).
-    """
     return {
         "status": "healthy",
         "timestamp": datetime.now(ZoneInfo("UTC")).isoformat(),
