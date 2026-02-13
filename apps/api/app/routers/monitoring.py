@@ -1,3 +1,4 @@
+# apps/api/app/routers/monitoring.py
 """
 Monitoring Router - CursorCode AI
 Endpoints for logging and observability.
@@ -5,15 +6,11 @@ Frontend error reporting, health checks.
 """
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional
 
-from fastapi import (
-    APIRouter,
-    Request,
-    Body,
-    HTTPException,
-    status,
-)
+from fastapi import APIRouter, Request, Body, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,10 +41,10 @@ class FrontendErrorPayload(BaseModel):
 @router.post("/log-error", status_code=status.HTTP_200_OK)
 @limiter.limit("20/minute")
 async def log_frontend_error(
-    request: Request,
-    payload: FrontendErrorPayload = Body(...),
-    current_user: OptionalCurrentUser = None,
-    db: DBSession,
+    request: Request,              # required first
+    db: DBSession,                 # required next
+    payload: FrontendErrorPayload = Body(...),  # default param last
+    current_user: OptionalCurrentUser = None,  # optional last
 ):
     message = payload.message
     url = payload.url
