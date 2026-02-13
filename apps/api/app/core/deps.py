@@ -1,5 +1,6 @@
 """
-Centralized FastAPI dependencies for the CursorCode AI API.
+app/core/deps.py
+Centralized FastAPI dependencies for CursorCode AI API.
 All reusable dependencies (db session, current user, admin checks, etc.) are defined here.
 """
 
@@ -49,7 +50,7 @@ security = HTTPBearer(auto_error=False)
 
 
 # ────────────────────────────────────────────────
-# Optional: Add more specialized dependencies here
+# Specialized / composed dependencies
 # ────────────────────────────────────────────────
 
 async def get_db_session() -> AsyncSession:
@@ -75,7 +76,9 @@ def require_authenticated_user(current_user: CurrentUser) -> AuthUser:
     return current_user
 
 
+# ────────────────────────────────────────────────
 # Example usage in a router:
+# ────────────────────────────────────────────────
 """
 from app.core.deps import DBSession, CurrentUser, CurrentAdminUser
 
