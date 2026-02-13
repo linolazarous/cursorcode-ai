@@ -2,7 +2,7 @@
 Admin Router - CursorCode AI
 Protected endpoints for platform administrators only.
 Requires 'admin' role in JWT claims.
-Statistics, user management, subscriptions, failed builds, maintenance, error logging.
+Statistics, user management, subscriptions, failed builds, maintenance.
 """
 
 import logging
@@ -14,18 +14,12 @@ from fastapi import (
     APIRouter,
     Query,
     Body,
-    Request,
 )
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, desc, insert
+from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.deps import (
-    DBSession,
-    CurrentAdminUser,
-    OptionalCurrentUser,
-)
+from app.core.deps import DBSession, CurrentAdminUser
 from app.db.models.user import User
 from app.db.models.org import Org
 from app.db.models.project import Project, ProjectStatus
@@ -320,46 +314,3 @@ async def toggle_maintenance_mode(
         "changed_by": current_user.email,
         "timestamp": datetime.now(ZoneInfo("UTC")).isoformat()
     }
-
-
-# ────────────────────────────────────────────────
-# Log Frontend Errors (called from Next.js)
-# ────────────────────────────────────────────────
-@router.post("/monitoring/frontend-error")
-async def log_frontend_error(
-    request: Request,                  # required - first (for IP)
-    data: Dict[str, Any] = Body(...),  # has default
-    current_user: OptionalCurrentUser = None,  # has default (optional)
-    db: DBSession,                     # required - last default is ok
-):
-    """
-    Endpoint for frontend to report JavaScript/runtime errors.
-    Stores in Supabase 'app_errors' table.
-    """
-    try:
-        await db.execute(
-            insert("app_errors").values(
-                level="frontend_error",
-                message=data.get("message", "Unknown frontend error"),
-                stack=data.get("stack"),
-                user_id=current_user.id if current_user else None,
-                request_path=data.get("url"),
-                request_method="GET",
-                environment=settings.ENVIRONMENT,
-                extra={
-                    "user_agent": data.get("userAgent"),
-                    "source": data.get("source"),
-                    "timestamp": data.get("timestamp"),
-                    "ip": request.client.host,
-                    **data,
-                },
-            )
-        )
-        await db.commit()
-
-        logger.info(f"Frontend error logged: {data.get('message')}")
-        return {"status": "logged"}
-
-    except Exception as e:
-        logger.error(f"Failed to store frontend error: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Error logging failed")
