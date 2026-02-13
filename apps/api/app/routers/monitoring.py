@@ -31,22 +31,16 @@ router = APIRouter(prefix="/monitoring", tags=["Monitoring"])
 limiter = Limiter(key_func=get_user_id_or_ip)
 
 
-# ────────────────────────────────────────────────
-# Payload validation
-# ────────────────────────────────────────────────
 class FrontendErrorPayload(BaseModel):
-    message: str = Field(..., min_length=1, description="Error message")
-    stack: Optional[str] = Field(None, description="Stack trace")
-    url: Optional[str] = Field(None, description="Page URL")
-    component: Optional[str] = Field(None, description="Component name")
-    userAgent: Optional[str] = Field(None, description="Browser user agent")
-    source: Optional[str] = Field(None, description="Error source file/line")
-    timestamp: Optional[str] = Field(None, description="Client timestamp")
+    message: str = Field(..., min_length=1)
+    stack: Optional[str] = Field(None)
+    url: Optional[str] = Field(None)
+    component: Optional[str] = Field(None)
+    userAgent: Optional[str] = Field(None)
+    source: Optional[str] = Field(None)
+    timestamp: Optional[str] = Field(None)
 
 
-# ────────────────────────────────────────────────
-# Log Frontend Error (called from Next.js)
-# ────────────────────────────────────────────────
 @router.post("/log-error", status_code=status.HTTP_200_OK)
 @limiter.limit("20/minute")
 async def log_frontend_error(
@@ -55,11 +49,6 @@ async def log_frontend_error(
     current_user: OptionalCurrentUser = None,
     db: DBSession,
 ):
-    """
-    Receives frontend JS/runtime errors from Next.js.
-    Stores in Supabase 'app_errors' table.
-    Returns 200 even on failure (frontend should not retry).
-    """
     message = payload.message
     url = payload.url
     component = payload.component
@@ -70,7 +59,6 @@ async def log_frontend_error(
     user_id = current_user.id if current_user else None
     ip = request.client.host
 
-    # Structured logging
     logger.error(
         "Frontend error received",
         extra={
@@ -88,7 +76,6 @@ async def log_frontend_error(
         }
     )
 
-    # Store in DB
     try:
         await db.execute(
             insert("app_errors").values(
@@ -113,7 +100,6 @@ async def log_frontend_error(
     except Exception as db_exc:
         logger.error(f"Failed to store frontend error in DB: {db_exc}")
 
-    # Audit log
     audit_log.delay(
         user_id=user_id,
         action="frontend_error_logged",
@@ -131,9 +117,6 @@ async def log_frontend_error(
     return {"status": "logged"}
 
 
-# ────────────────────────────────────────────────
-# Health check (public)
-# ────────────────────────────────────────────────
 @router.get("/health")
 async def monitoring_health():
     return {
