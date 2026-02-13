@@ -43,12 +43,12 @@ router = APIRouter(prefix="/webhook", tags=["Webhooks"])
 stripe.api_key = settings.STRIPE_SECRET_KEY.get_secret_value()
 STRIPE_WEBHOOK_SECRET = settings.STRIPE_WEBHOOK_SECRET.get_secret_value()
 
-# Convert Pydantic Url to string (fixes AttributeError: Url has no .decode)
 redis_client = Redis.from_url(str(settings.REDIS_URL), decode_responses=True)
 IDEMPOTENCY_TTL = 60 * 60 * 24 * 7      # 7 days
 DEBUG_PAYLOAD_TTL = 60 * 60 * 24        # 1 day for debug
 
-fernet = Fernet(settings.FERNET_KEY)    # 32-byte key for encryption
+# FIXED: Extract raw string from SecretStr
+fernet = Fernet(settings.FERNET_KEY.get_secret_value())
 
 # Rate limiter: high burst for Stripe, per IP
 limiter = Limiter(key_func=lambda r: r.client.host)
