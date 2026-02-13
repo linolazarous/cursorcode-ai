@@ -14,6 +14,7 @@ from fastapi import (
     APIRouter,
     Query,
     Body,
+    Request,
 )
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, desc
@@ -62,14 +63,10 @@ async def get_platform_overview_stats(
     db: DBSession,
     lookback_days: int = Query(30, ge=1, le=365, description="Lookback period in days"),
 ):
-    """
-    High-level platform stats (users, orgs, projects, subscriptions).
-    """
     since = datetime.now(ZoneInfo("UTC")) - timedelta(days=lookback_days)
 
     stats = {}
 
-    # Users
     total_users = await db.scalar(select(func.count(User.id)))
     stats["users"] = {
         "total": total_users,
@@ -78,13 +75,11 @@ async def get_platform_overview_stats(
         "new_last_30d": await db.scalar(select(func.count(User.id)).where(User.created_at >= since)),
     }
 
-    # Organizations
     stats["orgs"] = {
         "total": await db.scalar(select(func.count(Org.id))),
         "active": await db.scalar(select(func.count(Org.id)).where(Org.deleted_at.is_(None))),
     }
 
-    # Projects
     total_projects = await db.scalar(select(func.count(Project.id)))
     failed_projects = await db.scalar(select(func.count(Project.id)).where(Project.status == ProjectStatus.FAILED))
     stats["projects"] = {
@@ -95,7 +90,6 @@ async def get_platform_overview_stats(
         "failure_rate_pct": round(failed_projects / total_projects * 100, 1) if total_projects > 0 else 0.0,
     }
 
-    # Subscriptions
     stats["subscriptions"] = {
         "total_active": await db.scalar(select(func.count(User.id)).where(User.subscription_status == "active")),
         "by_plan": {
@@ -104,7 +98,6 @@ async def get_platform_overview_stats(
         }
     }
 
-    # Recent activity (24h)
     since_24h = datetime.now(ZoneInfo("UTC")) - timedelta(hours=24)
     stats["recent_activity"] = {
         "new_users_24h": await db.scalar(select(func.count(User.id)).where(User.created_at >= since_24h)),
@@ -125,9 +118,6 @@ async def get_recent_users(
     offset: int = Query(0, ge=0),
     search: Optional[str] = Query(None, description="Email or name partial match"),
 ):
-    """
-    List most recent users with pagination and optional search.
-    """
     stmt = select(User).order_by(desc(User.created_at))
 
     if search:
@@ -166,9 +156,6 @@ async def get_active_subscriptions(
     limit: int = Query(20, ge=5, le=100),
     offset: int = Query(0, ge=0),
 ):
-    """
-    List active subscriptions (paginated, filterable).
-    """
     stmt = select(User).where(User.subscription_status == status_filter)
 
     if plan_filter:
@@ -204,9 +191,6 @@ async def get_failed_projects(
     limit: int = Query(20, ge=5, le=100),
     offset: int = Query(0, ge=0),
 ):
-    """
-    List failed projects from the last N days (paginated).
-    """
     since = datetime.now(ZoneInfo("UTC")) - timedelta(days=days)
 
     stmt = (
@@ -245,9 +229,6 @@ async def adjust_user_credits(
     current_user: CurrentAdminUser,
     db: DBSession,
 ):
-    """
-    Manually adjust a user's credit balance (admin tool).
-    """
     target = await db.get(User, user_id)
     if not target:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
@@ -292,16 +273,6 @@ async def toggle_maintenance_mode(
     payload: MaintenanceToggle = Body(...),
     current_user: CurrentAdminUser,
 ):
-    """
-    Toggle global maintenance mode.
-    (Currently in-memory; implement Redis/DB storage in production)
-    """
-    # TODO: Store in Redis or Supabase config table
-    # Example Redis:
-    # async with get_redis_client() as redis:
-    #     await redis.set("maintenance:enabled", "1" if payload.enabled else "0", ex=86400*7)
-    #     await redis.set("maintenance:message", payload.message, ex=86400*7)
-
     audit_log.delay(
         user_id=current_user.id,
         action="maintenance_mode_toggle",
