@@ -1,4 +1,3 @@
-# apps/api/app/routers/monitoring.py
 """
 Monitoring Router - CursorCode AI
 Endpoints for logging and observability.
@@ -9,12 +8,12 @@ Production-ready (February 2026): structured logging, rate limiting, audit trail
 """
 
 import logging
-from typing import Dict, Any, Optional, Annotated
+from typing import Dict, Any, Optional
 
 from fastapi import (
     APIRouter,
     Request,
-    Depends,
+    Body,
     HTTPException,
     status,
 )
@@ -24,22 +23,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from slowapi import Limiter
 
 from app.core.config import settings
-from app.db.session import get_db
-from app.middleware.auth import get_current_user, AuthUser
+from app.core.deps import DBSession, OptionalCurrentUser, get_user_id_or_ip
 from app.services.logging import audit_log
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/monitoring", tags=["Monitoring"])
 
-# Rate limiter: per authenticated user when possible, fallback to IP
-def monitoring_limiter_key(request: Request) -> str:
-    user = getattr(request.state, "user", None)
-    if user and hasattr(user, "id"):
-        return str(user.id)
-    return request.client.host
-
-limiter = Limiter(key_func=monitoring_limiter_key)
+# Rate limiter: prefer user ID if authenticated, fallback to IP
+limiter = Limiter(key_func=get_user_id_or_ip)
 
 
 # ────────────────────────────────────────────────
@@ -61,10 +53,10 @@ class FrontendErrorPayload(BaseModel):
 @router.post("/log-error", status_code=status.HTTP_200_OK)
 @limiter.limit("20/minute")  # Reasonable for frontend error bursts
 async def log_frontend_error(
-    payload: FrontendErrorPayload,
     request: Request,
-    current_user: Annotated[Optional[AuthUser], Depends(get_current_user)] = None,
-    db: AsyncSession = Depends(get_db),
+    payload: FrontendErrorPayload = Body(...),
+    current_user: OptionalCurrentUser = None,
+    db: DBSession,
 ):
     """
     Receives frontend JavaScript/runtime errors from Next.js.
@@ -96,7 +88,7 @@ async def log_frontend_error(
             "user_id": user_id,
             "ip": ip,
             "environment": settings.ENVIRONMENT,
-            "request_path": request.url.path,
+            "request_path": str(request.url),
             "request_method": request.method,
         }
     )
@@ -126,7 +118,7 @@ async def log_frontend_error(
     except Exception as db_exc:
         logger.error(f"Failed to store frontend error in DB: {db_exc}")
 
-    # Audit log
+    # Audit log (queued)
     audit_log.delay(
         user_id=user_id,
         action="frontend_error_logged",
