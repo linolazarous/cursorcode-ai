@@ -284,4 +284,4 @@ async def toggle_maintenance_mode(
         "message": payload.message,
         "changed_by": current_user.email,
         "timestamp": datetime.now(ZoneInfo("UTC")).isoformat()
-    }
+                              }
