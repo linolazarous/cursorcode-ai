@@ -1,4 +1,5 @@
 """
+app/core/redis.py
 Centralized Redis client & utilities for CursorCode AI API.
 Handles connection pooling, async context management, health checks, and common patterns.
 Production-ready (2026): connection retry, logging, monitoring, graceful shutdown.
@@ -6,10 +7,9 @@ Production-ready (2026): connection retry, logging, monitoring, graceful shutdow
 
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Optional
+from typing import Dict, Any, AsyncGenerator, Optional  # ← FIXED: added missing imports
 
 from redis.asyncio import Redis, ConnectionPool, RedisError
-from redis.asyncio.connection import UnixDomainSocketConnection, Connection
 
 from app.core.config import settings
 
@@ -150,19 +150,3 @@ async def close_redis_pool():
         await _redis_pool.disconnect()
         _redis_pool = None
         logger.info("Redis connection pool closed")
-
-
-# ────────────────────────────────────────────────
-# Example usage in routers / services
-# ────────────────────────────────────────────────
-"""
-# In webhook.py or rate limiter:
-async with get_redis_client() as redis:
-    await redis.set("key", "value", ex=3600)
-
-# In health endpoint:
-@app.get("/health/redis")
-async def redis_health():
-    healthy = await check_redis_health()
-    return {"redis": "healthy" if healthy else "unhealthy"}
-"""
