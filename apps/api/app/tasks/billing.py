@@ -227,6 +227,73 @@ def handle_invoice_payment_failed_task(
 
 @shared_task(
     bind=True,
+    name="app.tasks.billing.handle_invoice_payment_succeeded",
+    max_retries=5,
+    default_retry_delay=30,
+    retry_backoff=True,
+    acks_late=True,
+)
+def handle_invoice_payment_succeeded_task(
+    self,
+    invoice_data: Dict[str, Any],  # required - first
+    user_id: Optional[str] = None,
+    action: str = "invoice_payment_succeeded",
+    metadata: Optional[Dict[str, Any]] = None,
+):
+    """
+    Invoice payment succeeded (non-recurring or one-time charge).
+    Usually same as paid, but kept separate for potential custom logic.
+    """
+    if metadata is None:
+        metadata = {}
+
+    customer_id = invoice_data["customer"]
+    subscription_id = invoice_data["subscription"]
+
+    async def _process(db: AsyncSession):
+        user = await db.scalar(select(User).where(User.stripe_customer_id == customer_id))
+        if not user or user.stripe_subscription_id != subscription_id:
+            logger.warning(f"Mismatched subscription {subscription_id} for customer {customer_id}")
+            return
+
+        # Typically same as paid - add credits if needed
+        credits_to_add = settings.STRIPE_PLAN_CREDITS.get(user.plan, 75)
+        user.credits += credits_to_add
+        user.subscription_status = "active"
+        user.updated_at = datetime.now(timezone.utc)
+
+        await db.commit()
+
+        logger.info(
+            f"Invoice payment succeeded → added {credits_to_add} credits to user {user.id}",
+            extra={"subscription_id": subscription_id}
+        )
+
+        audit_log.delay(
+            user_id=str(user.id),
+            action=action,
+            metadata=metadata
+        )
+
+        # Notify using generic send_email
+        send_email(
+            to=user.email,
+            subject="Payment Succeeded – Invoice Paid",
+            html=f"""
+            <p>Your recent payment was successful.</p>
+            <p>Subscription remains active. Thank you!</p>
+            """
+        )
+
+    try:
+        with async_session_factory() as db:
+            _process(db)
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+@shared_task(
+    bind=True,
     name="app.tasks.billing.handle_subscription_updated",
     max_retries=5,
     default_retry_delay=30,
