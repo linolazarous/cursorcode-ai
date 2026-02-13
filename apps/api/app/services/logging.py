@@ -15,7 +15,7 @@ from fastapi import Request
 from sqlalchemy import insert
 
 from app.db.session import async_session_factory
-from app.db.models.audit import AuditLog  # ← assuming AuditLog is in db/models/audit.py
+from app.db.models.audit import AuditLog
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,10 @@ def audit_log(
     ip = request.client.host if request else None
     ua = request.headers.get("user-agent") if request else None
     req_id = request.headers.get("X-Request-ID") if request else None
+
+    # Optional: truncate very large metadata to prevent DB bloat
+    if metadata and len(json.dumps(metadata)) > 100_000:
+        metadata = {"truncated": True, "original_size": len(json.dumps(metadata))}
 
     audit_log_task.delay(
         action=action,
