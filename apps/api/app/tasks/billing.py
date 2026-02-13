@@ -1,275 +1,349 @@
 """
-Billing Router - CursorCode AI
-Handles Stripe checkout, subscription management, credit usage, and billing portal.
-All endpoints require authentication.
+Celery tasks for processing Stripe webhook events.
+All tasks are idempotent where possible and include retries.
 """
 
 import logging
-from datetime import datetime
-from typing import Annotated, Dict, Literal, Optional
+from typing import Dict, Any, Optional
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-    status,
-    Request,
-    Body,
-)
-from fastapi.security import HTTPBearer
-from pydantic import BaseModel, Field
+from celery import shared_task
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from slowapi import Limiter
 
-import stripe
-from stripe.error import StripeError, InvalidRequestError
-
+from app.db.session import async_session_factory
+from app.db.models.user import User
 from app.core.config import settings
-from app.db.session import get_db
-from app.middleware.auth import get_current_user, AuthUser
-from app.db.models.user import User                  # ← FIXED: correct path
-from app.services.billing import (
-    create_or_get_stripe_customer,
-    create_checkout_session,
-    report_usage,
-)
 from app.services.logging import audit_log
+from app.services.email import (
+    send_email,
+    send_low_credits_alert,
+    send_subscription_status_email,
+)
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/billing", tags=["Billing"])
 
-security = HTTPBearer(auto_error=False)
-
-# Rate limiter: per authenticated user
-def billing_limiter_key(request: Request) -> str:
-    user = getattr(request.state, "user", None)
-    if user and hasattr(user, "id"):
-        return str(user.id)
-    return request.client.host  # fallback
-
-limiter = Limiter(key_func=billing_limiter_key)
-
-stripe.api_key = settings.STRIPE_SECRET_KEY.get_secret_value()
-
-
-# ────────────────────────────────────────────────
-# Models
-# ────────────────────────────────────────────────
-class Plan(str):
-    starter = "starter"
-    standard = "standard"
-    pro = "pro"
-    premier = "premier"
-    ultra = "ultra"
-
-
-class CreateCheckoutSessionRequest(BaseModel):
-    plan: Plan = Field(...)
-    success_url: str = Field(default_factory=lambda: f"{settings.FRONTEND_URL}/billing/success")
-    cancel_url: str = Field(default_factory=lambda: f"{settings.FRONTEND_URL}/billing")
-
-
-class BillingPortalRequest(BaseModel):
-    return_url: str = Field(default_factory=lambda: f"{settings.FRONTEND_URL}/billing")
-
-
-class UsageReportRequest(BaseModel):
-    tokens_used: int = Field(..., ge=0)
-    model: str = Field(..., min_length=1)
-
-
-class BillingStatusResponse(BaseModel):
-    plan: str
-    credits: int
-    subscription_status: Optional[str]
-    stripe_customer_id: Optional[str]
-    stripe_subscription_id: Optional[str]
-
-
-# ────────────────────────────────────────────────
-# Create Checkout Session (subscribe / upgrade plan)
-# ────────────────────────────────────────────────
-@router.post("/create-checkout-session", response_model=dict[str, str])
-@limiter.limit("5/minute")
-async def create_billing_session(
-    request: Request,
-    payload: CreateCheckoutSessionRequest,
-    current_user: Annotated[AuthUser, Depends(get_current_user)],
-    db: AsyncSession = Depends(get_db),
+@shared_task(
+    bind=True,
+    name="app.tasks.billing.handle_checkout_session_completed",
+    max_retries=5,
+    default_retry_delay=30,
+    retry_backoff=True,
+    retry_jitter=True,
+    acks_late=True,
+)
+def handle_checkout_session_completed_task(
+    self,
+    session_data: Dict[str, Any],  # required - first
+    user_id: Optional[str] = None,
+    action: str = "subscription_activated",
+    metadata: Optional[Dict[str, Any]] = None,
 ):
     """
-    Generate Stripe Checkout session for subscription or plan upgrade.
-    Returns session URL to redirect the user.
+    Process successful checkout session (new subscription created).
+    Idempotent: safe to re-run.
     """
-    try:
-        user = await db.get(User, current_user.id)
+    if metadata is None:
+        metadata = {}
+
+    customer_id = session_data["customer"]
+    subscription_id = session_data["subscription"]
+    plan = session_data.get("metadata", {}).get("plan", "starter")
+
+    async def _process(db: AsyncSession):
+        user = await db.scalar(select(User).where(User.stripe_customer_id == customer_id))
         if not user:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+            logger.warning(f"No user found for Stripe customer {customer_id}")
+            return
 
-        # Get or create Stripe customer
-        customer_id = await create_or_get_stripe_customer(user, db)
+        # Idempotency: skip if already processed
+        if user.stripe_subscription_id == subscription_id and user.subscription_status == "active":
+            logger.info(f"Subscription {subscription_id} already active for user {user.id}")
+            return
 
-        # Create checkout session with idempotency
-        idempotency_key = f"checkout_{current_user.id}_{payload.plan}_{datetime.utcnow().timestamp()}"
+        # Update user
+        user.stripe_subscription_id = subscription_id
+        user.plan = plan
+        user.credits += settings.STRIPE_PLAN_CREDITS.get(plan, 75)
+        user.subscription_status = "active"
+        user.updated_at = datetime.now(timezone.utc)
 
-        session = await create_checkout_session(
-            user=user,
-            plan=payload.plan,
-            success_url=payload.success_url,
-            cancel_url=payload.cancel_url,
-            db=db,
-            idempotency_key=idempotency_key,
+        await db.commit()
+        await db.refresh(user)
+
+        logger.info(
+            f"Activated subscription {subscription_id} for user {user.id}",
+            extra={"plan": plan, "credits_added": settings.STRIPE_PLAN_CREDITS.get(plan, 75)}
         )
 
         audit_log.delay(
-            user_id=current_user.id,
-            action="billing_checkout_created",
-            metadata={
-                "plan": payload.plan,
-                "session_id": session["session_id"],
-                "customer_id": customer_id,
-                "ip": request.client.host,
-            },
-            request=request,
+            user_id=str(user.id),
+            action=action,
+            metadata=metadata
         )
 
-        return {"url": session["url"]}
-
-    except StripeError as e:
-        logger.error(f"Stripe error during checkout: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Payment setup failed. Please try again or contact support."
+        # Welcome email
+        send_email(
+            to=user.email,
+            subject="Welcome to CursorCode AI – Subscription Active!",
+            html=f"""
+            <h2>Welcome aboard!</h2>
+            <p>Your {plan.capitalize()} plan is now active.</p>
+            <p>You received {settings.STRIPE_PLAN_CREDITS.get(plan, 75)} credits.</p>
+            <p><a href="{settings.FRONTEND_URL}/dashboard">Start Building</a></p>
+            """
         )
-    except Exception as e:
-        logger.exception("Checkout session creation failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Internal error")
+
+    try:
+        with async_session_factory() as db:
+            _process(db)
+    except Exception as exc:
+        logger.exception("Failed to process checkout.session.completed")
+        raise self.retry(exc=exc)
 
 
-# ────────────────────────────────────────────────
-# Customer Portal (manage subscriptions, payment methods)
-# ────────────────────────────────────────────────
-@router.post("/portal", response_model=dict[str, str])
-@limiter.limit("5/minute")
-async def create_billing_portal(
-    request: Request,
-    payload: BillingPortalRequest,
-    current_user: Annotated[AuthUser, Depends(get_current_user)],
-    db: AsyncSession = Depends(get_db),
+@shared_task(
+    bind=True,
+    name="app.tasks.billing.handle_invoice_paid",
+    max_retries=5,
+    default_retry_delay=30,
+    retry_backoff=True,
+    acks_late=True,
+)
+def handle_invoice_paid_task(
+    self,
+    invoice_data: Dict[str, Any],  # required - first
+    user_id: Optional[str] = None,
+    action: str = "invoice_paid",
+    metadata: Optional[Dict[str, Any]] = None,
 ):
     """
-    Create Stripe Customer Portal session for managing billing.
+    Monthly (or recurring) payment succeeded → reset/add credits.
     """
+    if metadata is None:
+        metadata = {}
+
+    customer_id = invoice_data["customer"]
+    subscription_id = invoice_data["subscription"]
+
+    async def _process(db: AsyncSession):
+        user = await db.scalar(select(User).where(User.stripe_customer_id == customer_id))
+        if not user or user.stripe_subscription_id != subscription_id:
+            logger.warning(f"Mismatched subscription {subscription_id} for customer {customer_id}")
+            return
+
+        credits_to_add = settings.STRIPE_PLAN_CREDITS.get(user.plan, 75)
+        user.credits += credits_to_add
+        user.subscription_status = "active"
+        user.updated_at = datetime.now(timezone.utc)
+
+        await db.commit()
+
+        logger.info(
+            f"Invoice paid → added {credits_to_add} credits to user {user.id}",
+            extra={"subscription_id": subscription_id}
+        )
+
+        audit_log.delay(
+            user_id=str(user.id),
+            action=action,
+            metadata=metadata
+        )
+
+        # Optional: notify on renewal
+        send_email(
+            to=user.email,
+            subject="Subscription Renewed – Credits Added!",
+            html=f"""
+            <p>Your subscription has renewed successfully.</p>
+            <p>You received {credits_to_add} credits for the next billing period.</p>
+            """
+        )
+
     try:
-        user = await db.get(User, current_user.id)
-        if not user or not user.stripe_customer_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No Stripe customer found. Create a subscription first."
+        with async_session_factory() as db:
+            _process(db)
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+@shared_task(
+    bind=True,
+    name="app.tasks.billing.handle_invoice_payment_failed",
+    max_retries=3,
+    default_retry_delay=300,  # 5 minutes
+    retry_backoff=True,
+)
+def handle_invoice_payment_failed_task(
+    self,
+    invoice_data: Dict[str, Any],  # required - first
+    user_id: Optional[str] = None,
+    action: str = "payment_failed",
+    metadata: Optional[Dict[str, Any]] = None,
+):
+    """
+    Payment failed → mark status, notify user (dunning flow)
+    """
+    if metadata is None:
+        metadata = {}
+
+    customer_id = invoice_data["customer"]
+    subscription_id = invoice_data["subscription"]
+    attempt_count = invoice_data.get("attempt_count", 1)
+
+    async def _process(db: AsyncSession):
+        user = await db.scalar(select(User).where(User.stripe_customer_id == customer_id))
+        if not user:
+            return
+
+        user.subscription_status = "past_due"
+        await db.commit()
+
+        logger.warning(
+            f"Payment failed (attempt {attempt_count}) for user {user.id}",
+            extra={"subscription_id": subscription_id}
+        )
+
+        audit_log.delay(
+            user_id=str(user.id),
+            action=action,
+            metadata=metadata
+        )
+
+        # Dunning email
+        send_email(
+            to=user.email,
+            subject=f"Payment Failed – Action Required (Attempt {attempt_count})",
+            html=f"""
+            <h2>Payment Failed</h2>
+            <p>We couldn't process your payment (attempt {attempt_count}).</p>
+            <p>Please <a href="{settings.FRONTEND_URL}/billing/update-payment">update your payment method</a> to avoid service interruption.</p>
+            <p>Your account will be downgraded in 7 days if unresolved.</p>
+            """
+        )
+
+    try:
+        with async_session_factory() as db:
+            _process(db)
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+@shared_task(
+    bind=True,
+    name="app.tasks.billing.handle_subscription_updated",
+    max_retries=5,
+    default_retry_delay=30,
+)
+def handle_subscription_updated_task(
+    self,
+    subscription_data: Dict[str, Any],  # required - first
+    user_id: Optional[str] = None,
+    action: str = "subscription_updated",
+    metadata: Optional[Dict[str, Any]] = None,
+):
+    """
+    Subscription status / plan changed (active → past_due → trialing → canceled, etc.)
+    """
+    if metadata is None:
+        metadata = {}
+
+    customer_id = subscription_data["customer"]
+    new_status = subscription_data["status"]
+    subscription_id = subscription_data["id"]
+
+    async def _process(db: AsyncSession):
+        user = await db.scalar(select(User).where(User.stripe_customer_id == customer_id))
+        if not user or user.stripe_subscription_id != subscription_id:
+            return
+
+        if user.subscription_status == new_status:
+            return  # idempotent
+
+        user.subscription_status = new_status
+        await db.commit()
+
+        logger.info(
+            f"Subscription {subscription_id} updated to {new_status} for user {user.id}"
+        )
+
+        audit_log.delay(
+            user_id=str(user.id),
+            action=action,
+            metadata=metadata
+        )
+
+        # Notify on important changes
+        if new_status in ["past_due", "canceled", "unpaid"]:
+            send_email(
+                to=user.email,
+                subject=f"Your Subscription is {new_status.capitalize()}",
+                html=f"""
+                <p>Your subscription status changed to <strong>{new_status}</strong>.</p>
+                <p>Please <a href="{settings.FRONTEND_URL}/billing">review your billing</a> to resolve.</p>
+                """
             )
 
-        session = stripe.billing_portal.Session.create(
-            customer=user.stripe_customer_id,
-            return_url=payload.return_url,
-            idempotency_key=f"portal_{current_user.id}_{datetime.utcnow().timestamp()}",
-        )
-
-        audit_log.delay(
-            user_id=current_user.id,
-            action="billing_portal_opened",
-            metadata={"session_id": session.id, "ip": request.client.host},
-            request=request,
-        )
-
-        return {"url": session.url}
-
-    except StripeError as e:
-        logger.error(f"Stripe portal error: {e}")
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Billing portal unavailable")
-    except Exception as e:
-        logger.exception("Portal session creation failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Internal error")
-
-
-# ────────────────────────────────────────────────
-# Get current plan & credits (for dashboard)
-# ────────────────────────────────────────────────
-@router.get("/status", response_model=BillingStatusResponse)
-async def get_billing_status(
-    current_user: Annotated[AuthUser, Depends(get_current_user)],
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Returns user's current plan, credits, and subscription status.
-    """
-    user = await db.get(User, current_user.id)
-    if not user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
-
-    return BillingStatusResponse(
-        plan=user.plan,
-        credits=user.credits,
-        subscription_status=user.subscription_status,
-        stripe_customer_id=user.stripe_customer_id,
-        stripe_subscription_id=user.stripe_subscription_id,
-    )
-
-
-# ────────────────────────────────────────────────
-# Report Grok usage (called from orchestrator after agent run)
-# ────────────────────────────────────────────────
-@router.post("/usage/report")
-@limiter.limit("20/minute")  # Higher limit for internal usage reporting
-async def report_grok_usage_endpoint(
-    request: Request,
-    payload: UsageReportRequest = Body(...),
-    current_user: Annotated[AuthUser, Depends(get_current_user)],
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Reports Grok token usage to Stripe (metered billing).
-    Called internally by orchestration after each agent step.
-    """
     try:
-        await report_usage(
-            user_id=current_user.id,
-            tokens=payload.tokens_used,
-            model=payload.model,
-            db=db,
+        with async_session_factory() as db:
+            _process(db)
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+@shared_task(
+    bind=True,
+    name="app.tasks.billing.handle_subscription_deleted",
+    max_retries=3,
+    default_retry_delay=60,
+)
+def handle_subscription_deleted_task(
+    self,
+    subscription_data: Dict[str, Any],  # required - first
+    user_id: Optional[str] = None,
+    action: str = "subscription_canceled",
+    metadata: Optional[Dict[str, Any]] = None,
+):
+    """
+    Subscription canceled / deleted → downgrade to free tier
+    """
+    if metadata is None:
+        metadata = {}
+
+    customer_id = subscription_data["customer"]
+    subscription_id = subscription_data["id"]
+
+    async def _process(db: AsyncSession):
+        user = await db.scalar(select(User).where(User.stripe_customer_id == customer_id))
+        if not user or user.stripe_subscription_id != subscription_id:
+            return
+
+        user.plan = "starter"
+        user.credits = settings.FREE_TIER_CREDITS  # e.g. 10
+        user.stripe_subscription_id = None
+        user.subscription_status = "canceled"
+        await db.commit()
+
+        logger.info(f"Subscription {subscription_id} deleted → downgraded user {user.id} to starter")
+
+        send_email(
+            to=user.email,
+            subject="Your CursorCode AI Subscription Has Been Canceled",
+            html=f"""
+            <p>Your subscription has been canceled.</p>
+            <p>You are now on the free Starter plan with {settings.FREE_TIER_CREDITS} credits.</p>
+            <p><a href="{settings.FRONTEND_URL}/billing">Reactivate anytime</a></p>
+            """
         )
 
         audit_log.delay(
-            user_id=current_user.id,
-            action="grok_usage_reported",
-            metadata={
-                "tokens": payload.tokens_used,
-                "model": payload.model,
-                "ip": request.client.host,
-            },
-            request=request,
+            user_id=str(user.id),
+            action=action,
+            metadata=metadata
         )
 
-        return {"status": "reported", "tokens": payload.tokens_used}
-
-    except Exception as e:
-        logger.exception("Failed to report usage")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Usage reporting failed")
-
-
-# ────────────────────────────────────────────────
-# Webhook confirmation test endpoint (admin-only debug)
-# ────────────────────────────────────────────────
-@router.get("/webhook/test")
-async def test_webhook_connection(
-    current_user: Annotated[AuthUser, Depends(require_admin)],
-):
-    """
-    Simple endpoint to verify webhook URL is reachable from Stripe.
-    Admin-only for security.
-    """
-    return {
-        "status": "webhook endpoint reachable",
-        "user": current_user.email,
-        "timestamp": datetime.now(ZoneInfo("UTC")).isoformat()
-    }
+    try:
+        with async_session_factory() as db:
+            _process(db)
+    except Exception as exc:
+        raise self.retry(exc=exc)
