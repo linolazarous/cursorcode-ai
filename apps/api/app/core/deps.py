@@ -11,7 +11,12 @@ from fastapi.security import HTTPBearer
 
 from app.core.config import settings
 from app.db.session import async_session_factory, get_db
-from app.middleware.auth import get_current_user, AuthUser, require_admin, require_org_owner
+from app.middleware.auth import (
+    get_current_user,
+    AuthUser,
+    require_admin,
+    require_org_owner,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # ────────────────────────────────────────────────
@@ -77,10 +82,10 @@ def require_authenticated_user(current_user: CurrentUser) -> AuthUser:
 
 
 # ────────────────────────────────────────────────
-# Example usage in a router:
+# Example usage in a router (especially admin.py)
 # ────────────────────────────────────────────────
 """
-from app.core.deps import DBSession, CurrentUser, CurrentAdminUser
+from app.core.deps import DBSession, CurrentAdminUser, OptionalCurrentUser
 
 @router.get("/users/me")
 async def read_users_me(
@@ -88,4 +93,13 @@ async def read_users_me(
     db: DBSession,
 ):
     return current_user
+
+@router.post("/monitoring/frontend-error")
+async def log_frontend_error(
+    request: Request,
+    data: Dict[str, Any] = Body(...),
+    current_user: OptionalCurrentUser = None,
+    db: DBSession,
+):
+    ...
 """
