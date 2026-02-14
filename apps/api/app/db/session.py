@@ -3,15 +3,15 @@ Database session management for CursorCode AI.
 
 Production-grade (Supabase + Render + asyncpg)
 
-Features:
-• Async SQLAlchemy engine
-• Supabase pooled connection optimized
-• Proper SSLContext (fixes CERTIFICATE_VERIFY_FAILED)
-• Stable connection pooling
+Fully optimized for:
+
+• Supabase pooled connection
+• Render deployment
+• asyncpg driver
+• SSL verification
 • FastAPI dependency injection
 • Health checks
-• Startup connection verification
-• Graceful shutdown
+• Lifespan startup/shutdown
 """
 
 import logging
@@ -31,17 +31,16 @@ from sqlalchemy import text
 from app.core.config import settings
 
 
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
 # Logging
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
 
 logger = logging.getLogger("cursorcode.db")
 
 
-# ────────────────────────────────────────────────
-# SSL Context (CRITICAL FIX)
-# ────────────────────────────────────────────────
-# Supabase requires proper SSL context, NOT ssl=True
+# ─────────────────────────────────────
+# SSL Context (Supabase REQUIRED)
+# ─────────────────────────────────────
 
 ssl_context = ssl.create_default_context()
 
@@ -49,46 +48,49 @@ ssl_context.check_hostname = True
 ssl_context.verify_mode = ssl.CERT_REQUIRED
 
 
-# ────────────────────────────────────────────────
-# Engine Creation
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
+# Database URL
+# ─────────────────────────────────────
 
 DATABASE_URL = str(settings.DATABASE_URL)
 
-is_dev = settings.is_dev
+
+# ─────────────────────────────────────
+# Engine Creation
+# ─────────────────────────────────────
 
 
 def create_engine() -> AsyncEngine:
-    """
-    Create Async SQLAlchemy Engine.
-
-    Supabase pooler compatible.
-    """
 
     logger.info(
         "Creating database engine",
         extra={
             "environment": settings.ENVIRONMENT,
-            "database_host": settings.DATABASE_URL.host,
+            "host": settings.DATABASE_URL.host,
         },
     )
 
     return create_async_engine(
         DATABASE_URL,
 
-        # Debug logging
-        echo=is_dev,
+        # Logging
+        echo=settings.is_dev,
 
-        # Connection pool
-        pool_size=5,
-        max_overflow=10,
+        # Pool settings (SUPABASE SAFE)
+        pool_size=3,
+        max_overflow=5,
         pool_timeout=30,
         pool_recycle=1800,
+
+        # VERY IMPORTANT
         pool_pre_ping=True,
 
-        # Critical: Supabase SSL fix
+        # asyncpg settings
         connect_args={
             "ssl": ssl_context,
+
+            "statement_cache_size": 0,
+
             "server_settings": {
                 "application_name": "cursorcode-api"
             },
@@ -99,37 +101,28 @@ def create_engine() -> AsyncEngine:
 engine: AsyncEngine = create_engine()
 
 
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
 # Session Factory
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
 
 async_session_factory = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
+    engine,
     expire_on_commit=False,
 )
 
 
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
 # FastAPI Dependency
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """
-    FastAPI DB dependency.
-
-    Usage:
-
-        db: AsyncSession = Depends(get_db)
-    """
 
     async with async_session_factory() as session:
 
         try:
 
             yield session
-
-            await session.commit()
 
         except Exception:
 
@@ -142,9 +135,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
 # Health Check
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
+
 
 async def check_db_connection() -> bool:
 
@@ -166,25 +160,28 @@ async def check_db_connection() -> bool:
         return False
 
 
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
 # Startup Test
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
+
 
 async def init_db():
 
-    logger.info("Testing database connection...")
+    logger.info("Testing database connection")
 
     try:
 
         async with engine.connect() as conn:
 
-            result = await conn.execute(text("SELECT version()"))
+            result = await conn.execute(
+                text("SELECT version()")
+            )
 
             version = result.scalar()
 
             logger.info(
-                "Database connected successfully",
-                extra={"postgres_version": version}
+                "Database connected",
+                extra={"version": version}
             )
 
     except Exception:
@@ -195,29 +192,31 @@ async def init_db():
         )
 
 
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
 # FastAPI Lifespan
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
+
 
 @asynccontextmanager
 async def lifespan(app):
 
-    logger.info("CursorCode API starting")
+    logger.info("Starting CursorCode API")
 
     await init_db()
 
     yield
 
-    logger.info("Closing database engine")
+    logger.info("Closing database")
 
     await engine.dispose()
 
-    logger.info("Database engine closed")
+    logger.info("Database closed")
 
 
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
 # Utility
-# ────────────────────────────────────────────────
+# ─────────────────────────────────────
+
 
 def get_engine() -> AsyncEngine:
 
