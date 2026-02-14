@@ -2,7 +2,7 @@
 CursorCode AI FastAPI Application Entry Point
 Production-ready (February 2026): middleware stack, lifespan, observability, security.
 Supabase-ready: external managed Postgres, no auto-migrations, no engine dispose.
-Custom monitoring: structured logging + Supabase error table + Prometheus /metrics (optional).
+Custom monitoring: structured logging + Supabase error table + optional Prometheus /metrics.
 """
 
 import logging
@@ -12,7 +12,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 
@@ -92,35 +92,7 @@ app.add_middleware(
 # 2. Security Headers (CSP, HSTS, etc.) – applied to every response
 app.add_middleware(SecurityHeadersMiddleware)
 
-# 3. Request Logging + Prometheus Metrics (if enabled)
-@app.middleware("http")
-async def metrics_middleware(request: Request, call_next):
-    method = request.method
-    path = request.url.path
-    start_time = time.time()
-
-    # Correlation ID for tracing
-    request_id = str(uuid.uuid4())
-    request.state.request_id = request_id
-
-    try:
-        response = await call_next(request)
-        status_code = response.status_code
-    except Exception:
-        status_code = 500
-        raise
-    finally:
-        duration = time.time() - start_time
-        if PROMETHEUS_ENABLED:
-            try:
-                http_requests_total.labels(method=method, path=path, status=status_code).inc()
-                http_request_duration_seconds.labels(method=method, path=path, status=status_code).observe(duration)
-            except Exception as metrics_exc:
-                logger.warning("Prometheus metrics failed", exc_info=metrics_exc)
-
-    return response
-
-# 4. Rate Limiting (Redis + user-aware keys)
+# 3. Rate Limiting (Redis + user-aware keys) – after auth (sets current_user)
 app.add_middleware(RateLimitMiddleware)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
@@ -137,7 +109,17 @@ app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 app.include_router(monitoring.router, prefix="/monitoring", tags=["Monitoring"])
 
 # ────────────────────────────────────────────────
-# Prometheus Metrics Endpoint (if enabled)
+# Root Redirect (welcome / docs)
+# ────────────────────────────────────────────────
+@app.get("/", include_in_schema=False)
+async def root():
+    if settings.ENVIRONMENT != "production":
+        return RedirectResponse(url="/docs")
+    return {"message": "CursorCode AI API is running"}
+
+
+# ────────────────────────────────────────────────
+# Prometheus Metrics Endpoint (optional)
 # ────────────────────────────────────────────────
 if PROMETHEUS_ENABLED:
     @app.get("/metrics", include_in_schema=False)
@@ -147,6 +129,7 @@ else:
     @app.get("/metrics", include_in_schema=False)
     async def metrics():
         return {"detail": "Prometheus metrics not configured"}
+
 
 # ────────────────────────────────────────────────
 # Custom Global Exception Handler (structured + Supabase logging)
@@ -213,7 +196,7 @@ async def health_check():
 @app.get("/ready", tags=["Health"])
 async def readiness_check():
     """
-    Readiness probe: DB ping + optional Redis ping.
+    Readiness probe: real DB ping + optional Redis ping.
     """
     try:
         async with get_db() as db:
