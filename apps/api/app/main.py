@@ -4,7 +4,7 @@ Production-ready (February 2026)
 
 Features:
 - Supabase-ready external Postgres
-- Proper async DB handling
+- Async DB handling
 - Structured logging
 - Prometheus metrics
 - Health / readiness / liveness probes
@@ -46,29 +46,23 @@ from app.middleware.rate_limit import (
 try:
     from prometheus_client import generate_latest
     from app.monitoring.metrics import registry
-
     PROMETHEUS_ENABLED = True
 except Exception:
     registry = None
     PROMETHEUS_ENABLED = False
 
-
 # ────────────────────────────────────────────────
 # Logging
 # ────────────────────────────────────────────────
-
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d - %(message)s",
 )
-
 logger = logging.getLogger("cursorcode.api")
-
 
 # ────────────────────────────────────────────────
 # FastAPI App
 # ────────────────────────────────────────────────
-
 app = FastAPI(
     title="CursorCode AI API",
     version=settings.APP_VERSION,
@@ -76,17 +70,13 @@ app = FastAPI(
     lifespan=db_lifespan,
     docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
     redoc_url=None,
-    openapi_url="/openapi.json"
-    if settings.ENVIRONMENT != "production"
-    else None,
-    debug=settings.ENVIRONMENT == "development",
+    openapi_url="/openapi.json" if settings.ENVIRONMENT != "production" else None,
+    debug=settings.is_dev,
 )
-
 
 # ────────────────────────────────────────────────
 # Middleware
 # ────────────────────────────────────────────────
-
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -95,25 +85,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # Security headers
 app.add_middleware(SecurityHeadersMiddleware)
-
 # Rate limit
 app.add_middleware(RateLimitMiddleware)
-
 app.state.limiter = limiter
-
-app.add_exception_handler(
-    RateLimitExceeded,
-    rate_limit_exceeded_handler,
-)
-
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # ────────────────────────────────────────────────
 # Routers
 # ────────────────────────────────────────────────
-
 app.include_router(auth.router, prefix="/auth")
 app.include_router(orgs.router, prefix="/orgs")
 app.include_router(projects.router, prefix="/projects")
@@ -122,136 +103,75 @@ app.include_router(webhook.router, prefix="/webhook")
 app.include_router(admin.router, prefix="/admin")
 app.include_router(monitoring.router, prefix="/monitoring")
 
-
 # ────────────────────────────────────────────────
 # Root
 # ────────────────────────────────────────────────
-
 @app.get("/", include_in_schema=False)
 async def root():
-
     if settings.ENVIRONMENT != "production":
-
         return RedirectResponse("/docs")
-
     return {"status": "ok"}
-
 
 # ────────────────────────────────────────────────
 # Prometheus
 # ────────────────────────────────────────────────
-
 @app.get("/metrics", include_in_schema=False)
 async def metrics():
-
     if not PROMETHEUS_ENABLED:
-
         return {"detail": "Prometheus disabled"}
-
-    return Response(
-        generate_latest(registry),
-        media_type="text/plain",
-    )
-
+    return Response(generate_latest(registry), media_type="text/plain")
 
 # ────────────────────────────────────────────────
 # Exception Handler
 # ────────────────────────────────────────────────
-
 @app.exception_handler(Exception)
-async def global_exception_handler(
-    request: Request,
-    exc: Exception,
-):
-
+async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error")
-
     try:
-
-        db_gen = get_db()
-
-        db = await db_gen.__anext__()
-
-        await db.execute(
-            insert(text("app_errors")).values(
-                level="error",
-                message=str(exc),
-                stack=traceback.format_exc(),
-                request_path=request.url.path,
-                request_method=request.method,
-                environment=settings.ENVIRONMENT,
+        async for db in get_db():
+            await db.execute(
+                insert(text("app_errors")).values(
+                    level="error",
+                    message=str(exc),
+                    stack=traceback.format_exc(),
+                    request_path=request.url.path,
+                    request_method=request.method,
+                    environment=settings.ENVIRONMENT,
+                )
             )
-        )
-
-        await db.commit()
-
+            await db.commit()
+            break
     except Exception as db_exc:
-
-        logger.error(f"Error logging failed: {db_exc}")
-
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
-    )
-
+        logger.error(f"Error logging to DB failed: {db_exc}")
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # ────────────────────────────────────────────────
 # Health
 # ────────────────────────────────────────────────
-
 @app.get("/health")
 async def health():
-
-    return {
-
-        "status": "healthy",
-
-        "version": settings.APP_VERSION,
-
-    }
-
+    return {"status": "healthy", "version": settings.APP_VERSION}
 
 # ────────────────────────────────────────────────
 # Readiness
 # ────────────────────────────────────────────────
-
 @app.get("/ready")
 async def ready():
-
     try:
-
-        db_gen = get_db()
-
-        db = await db_gen.__anext__()
-
-        await db.execute(text("SELECT 1"))
-
+        async for db in get_db():
+            await db.execute(text("SELECT 1"))
+            break
         return {"status": "ready"}
-
     except Exception as e:
-
-        logger.error("Readiness failed", exc_info=True)
-
+        logger.error("Readiness probe failed", exc_info=True)
         return JSONResponse(
-
             status_code=503,
-
-            content={
-
-                "status": "not ready",
-
-                "error": str(e),
-
-            },
-
+            content={"status": "not ready", "error": str(e)},
         )
-
 
 # ────────────────────────────────────────────────
 # Liveness
 # ────────────────────────────────────────────────
-
 @app.get("/live")
 async def live():
-
     return {"status": "alive"}
