@@ -28,7 +28,11 @@ engine: AsyncEngine = create_async_engine(
     pool_timeout=30,
     pool_recycle=600,
     connect_args={
-        "ssl": True,  # Force SSL for Supabase (required)
+        "ssl": {
+            "sslmode": "require",          # Supabase enforces SSL
+            "check_hostname": False,       # Pooler hostname may not match cert
+            "verify_cert": False,          # Critical: disables cert chain verification (self-signed in Supabase pooler)
+        },
         "server_settings": {"application_name": "cursorcode-api"},
     },
 )
@@ -60,6 +64,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 # Startup: Test connection (non-fatal)
 # ────────────────────────────────────────────────
 async def init_db():
+    """
+    Run on app startup – verifies connection to PostgreSQL/Supabase.
+    Logs detailed error but does NOT crash app (allows partial startup).
+    """
     db_url = str(settings.DATABASE_URL)
     logger.info("Testing database connection", extra={"url": db_url})
 
