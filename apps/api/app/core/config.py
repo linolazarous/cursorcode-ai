@@ -1,12 +1,25 @@
 """
 Central configuration & settings for CursorCode AI API
-Loads from environment variables with strict validation (pydantic-settings v2+).
-Production-ready (February 2026): type-safe, computed props, secrets handling.
-Uses Resend for email sending (SendGrid migration complete).
+
+Production-ready configuration system
+Supports:
+
+• Supabase
+• Redis
+• Stripe
+• JWT Auth
+• Resend Email
+• xAI Grok
+• Security hardening
+• Local dev (Termux)
+• Production deployment
 """
 
 from functools import lru_cache
 from typing import Any, Dict, List
+
+import json
+import logging
 
 from pydantic import (
     AnyHttpUrl,
@@ -18,203 +31,319 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
-import json
+
+
+# ────────────────────────────────────────────────
+# Logger
+# ────────────────────────────────────────────────
+
+logger = logging.getLogger("cursorcode.config")
+
+
+# ────────────────────────────────────────────────
+# Settings Class
+# ────────────────────────────────────────────────
 
 
 class Settings(BaseSettings):
-    """
-    CursorCode AI API Settings
-    All values loaded from environment variables (.env or platform secrets).
-    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore",  # Ignore unknown env vars
+        extra="ignore",
     )
 
     # ────────────────────────────────────────────────
-    # Core App
+    # Environment
     # ────────────────────────────────────────────────
+
     ENVIRONMENT: str = Field(
-        ...,
-        pattern=r"^(development|staging|production)$",
-        description="Runtime environment"
+        default="development",
+        description="development | staging | production",
     )
+
     APP_VERSION: str = "1.0.0"
-    LOG_LEVEL: str = Field("INFO", pattern=r"^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
+
+    LOG_LEVEL: str = Field(
+        default="INFO"
+    )
+
 
     # ────────────────────────────────────────────────
-    # URLs & Domains
+    # URLs
     # ────────────────────────────────────────────────
+
     FRONTEND_URL: AnyHttpUrl = Field(
-        ...,
-        description="Base URL of the frontend (used in emails, links, CORS, redirects)"
+        default="http://localhost:3000"
     )
 
     @property
-    def api_url(self) -> AnyHttpUrl:
-        """Computed API base URL (derived from FRONTEND_URL)."""
-        return AnyHttpUrl(f"{self.FRONTEND_URL.rstrip('/')}/api")
+    def api_url(self) -> str:
+        return f"{str(self.FRONTEND_URL).rstrip('/')}/api"
+
 
     # ────────────────────────────────────────────────
-    # Database (PostgreSQL + asyncpg)
+    # Database
     # ────────────────────────────────────────────────
-    DATABASE_URL: PostgresDsn = Field(
-        ...,
-        description="PostgreSQL connection string (asyncpg driver expected)"
-    )
+
+    DATABASE_URL: PostgresDsn
+
 
     @field_validator("DATABASE_URL")
     @classmethod
-    def validate_db_url(cls, v: PostgresDsn) -> PostgresDsn:
-        if not str(v).startswith("postgresql+asyncpg://"):
-            raise ValueError("DATABASE_URL must use asyncpg driver (postgresql+asyncpg://...)")
+    def validate_db(cls, v):
+
+        url = str(v)
+
+        if "asyncpg" not in url:
+
+            raise ValueError(
+                "DATABASE_URL must use asyncpg driver"
+            )
+
         return v
 
-    # ────────────────────────────────────────────────
-    # Redis (Upstash or self-hosted)
-    # ────────────────────────────────────────────────
-    REDIS_URL: RedisDsn = Field(
-        ...,
-        description="Redis connection string (used for caching, rate limiting, sessions)"
-    )
 
     # ────────────────────────────────────────────────
-    # Stripe Billing
+    # Redis
     # ────────────────────────────────────────────────
+
+    REDIS_URL: RedisDsn
+
+
+    # ────────────────────────────────────────────────
+    # Stripe
+    # ────────────────────────────────────────────────
+
     STRIPE_SECRET_KEY: SecretStr
+
     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: str
+
     STRIPE_WEBHOOK_SECRET: SecretStr
 
-    # NEW: Fernet key for encrypting debug payloads in webhook
-    FERNET_KEY: SecretStr = Field(
-        ...,
-        env="FERNET_KEY",
-        description="Fernet symmetric encryption key (32 bytes base64-encoded)"
-    )
+    FERNET_KEY: SecretStr
 
-    # NEW: Credits per plan (JSON dict from env or fallback defaults)
-    STRIPE_PLAN_CREDITS_JSON: str | None = Field(
-        default=None,
-        env="STRIPE_PLAN_CREDITS_JSON",
-        description="JSON string: {'starter': 75, 'pro': 500, ...}"
-    )
+
+    STRIPE_PLAN_CREDITS_JSON: str | None = None
+
 
     @property
     def STRIPE_PLAN_CREDITS(self) -> Dict[str, int]:
-        """Parsed credits per plan."""
+
         if self.STRIPE_PLAN_CREDITS_JSON:
+
             try:
-                return json.loads(self.STRIPE_PLAN_CREDITS_JSON)
-            except json.JSONDecodeError:
-                logger.warning("Invalid STRIPE_PLAN_CREDITS_JSON – using defaults")
-        # Fallback defaults
+
+                return json.loads(
+                    self.STRIPE_PLAN_CREDITS_JSON
+                )
+
+            except Exception:
+
+                logger.warning(
+                    "Invalid STRIPE_PLAN_CREDITS_JSON"
+                )
+
         return {
+
             "starter": 75,
             "standard": 200,
             "pro": 500,
             "premier": 1500,
             "ultra": 5000,
+
         }
 
-    # NEW: Free tier credits (used on downgrade/cancel)
-    FREE_TIER_CREDITS: int = Field(10, ge=0, description="Credits granted on free tier/downgrade")
+
+    FREE_TIER_CREDITS: int = 10
+
 
     # ────────────────────────────────────────────────
-    # Resend Email
+    # Email
     # ────────────────────────────────────────────────
-    RESEND_API_KEY: SecretStr = Field(
-        ...,
-        description="Resend API key for sending emails"
-    )
-    EMAIL_FROM: EmailStr = Field(
-        "no-reply@cursorcode.ai",
-        description="Default sender email (must be verified in Resend dashboard)"
-    )
-    EMAIL_FROM_NAME: str = Field(
-        "CursorCode AI",
-        description="Friendly sender name displayed in email clients"
-    )
+
+    RESEND_API_KEY: SecretStr
+
+    EMAIL_FROM: EmailStr = "no-reply@cursorcode.ai"
+
+    EMAIL_FROM_NAME: str = "CursorCode AI"
+
 
     # ────────────────────────────────────────────────
-    # xAI / Grok API
+    # xAI
     # ────────────────────────────────────────────────
+
     XAI_API_KEY: SecretStr
-    DEFAULT_XAI_MODEL: str = Field("grok-beta", description="Default Grok model")
-    FAST_REASONING_MODEL: str = Field("grok-beta-fast", description="Fast reasoning model")
-    FAST_NON_REASONING_MODEL: str = Field("grok-beta-fast", description="Fast non-reasoning model")
+
+    DEFAULT_XAI_MODEL: str = "grok-beta"
+
+    FAST_REASONING_MODEL: str = "grok-beta-fast"
+
+    FAST_NON_REASONING_MODEL: str = "grok-beta-fast"
+
 
     # ────────────────────────────────────────────────
-    # JWT & Security
+    # JWT
     # ────────────────────────────────────────────────
+
     JWT_SECRET_KEY: SecretStr
-    JWT_REFRESH_SECRET: SecretStr
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(15, ge=1, le=1440)
-    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, ge=1, le=90)
 
-    @field_validator("JWT_SECRET_KEY", "JWT_REFRESH_SECRET", "FERNET_KEY")
+    JWT_REFRESH_SECRET: SecretStr
+
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+
+
+    @field_validator(
+        "JWT_SECRET_KEY",
+        "JWT_REFRESH_SECRET",
+        "FERNET_KEY",
+    )
+
     @classmethod
-    def validate_secrets(cls, v: SecretStr) -> SecretStr:
+    def validate_secret_length(cls, v):
+
         if len(v.get_secret_value()) < 32:
-            raise ValueError("Secrets must be at least 32 characters long")
+
+            raise ValueError(
+                "Secret must be >= 32 chars"
+            )
+
         return v
 
-    COOKIE_SECURE: bool = Field(True, description="Set to False in development only")
-    COOKIE_DEFAULTS: dict[str, Any] = Field(default_factory=lambda: {
+
+    # ────────────────────────────────────────────────
+    # Cookies
+    # ────────────────────────────────────────────────
+
+    COOKIE_SECURE: bool = True
+
+
+    COOKIE_DEFAULTS: dict = {
+
         "httponly": True,
-        "secure": True,          # overridden by COOKIE_SECURE in production
+
+        "secure": True,
+
         "samesite": "strict",
+
         "path": "/",
-    })
+
+    }
+
 
     # ────────────────────────────────────────────────
     # CORS
     # ────────────────────────────────────────────────
-    CORS_ORIGINS: List[AnyHttpUrl] = Field(default_factory=list)
+
+    CORS_ORIGINS: List[AnyHttpUrl] = []
+
 
     @model_validator(mode="after")
-    def compute_cors_origins(self) -> "Settings":
-        """Auto-populate CORS_ORIGINS from FRONTEND_URL if empty."""
+
+    def cors_validator(self):
+
         if not self.CORS_ORIGINS:
-            self.CORS_ORIGINS = [self.FRONTEND_URL]
+
+            self.CORS_ORIGINS = [
+
+                self.FRONTEND_URL
+
+            ]
+
         return self
 
+
     # ────────────────────────────────────────────────
-    # Validation & Computed Properties
+    # Environment validation
     # ────────────────────────────────────────────────
-    @field_validator("ENVIRONMENT", mode="before")
+
+    @field_validator("ENVIRONMENT")
+
     @classmethod
-    def validate_env(cls, v: str) -> str:
-        v = v.lower().strip()
-        if v not in ["development", "staging", "production"]:
-            raise ValueError("Invalid ENVIRONMENT value")
+
+    def validate_env(cls, v):
+
+        v = v.lower()
+
+        if v not in [
+
+            "development",
+
+            "staging",
+
+            "production",
+
+        ]:
+
+            raise ValueError(
+
+                "Invalid ENVIRONMENT"
+
+            )
+
         return v
 
+
+    # ────────────────────────────────────────────────
+    # Helpers
+    # ────────────────────────────────────────────────
+
+
     @property
-    def is_production(self) -> bool:
+
+    def is_production(self):
+
         return self.ENVIRONMENT == "production"
 
+
     @property
-    def is_dev(self) -> bool:
+
+    def is_dev(self):
+
         return self.ENVIRONMENT == "development"
 
-    def get_cookie_options(self, max_age: int | None = None) -> dict[str, Any]:
-        """Get secure cookie options, adjusted for environment."""
+
+    def get_cookie_options(
+
+        self,
+
+        max_age: int | None = None,
+
+    ):
+
         opts = self.COOKIE_DEFAULTS.copy()
-        opts["secure"] = self.COOKIE_SECURE and self.is_production
-        if max_age is not None:
+
+        opts["secure"] = (
+
+            self.COOKIE_SECURE
+
+            and self.is_production
+
+        )
+
+        if max_age:
+
             opts["max_age"] = max_age
+
         return opts
 
 
 # ────────────────────────────────────────────────
-# Singleton instance (cached)
+# Singleton
 # ────────────────────────────────────────────────
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
+
+
+@lru_cache
+
+def get_settings():
+
+    logger.info("Loading settings")
+
     return Settings()
 
 
