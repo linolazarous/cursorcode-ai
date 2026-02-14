@@ -1,103 +1,208 @@
 """
 Database session management for CursorCode AI.
-Async SQLAlchemy engine, session factory, and FastAPI dependency.
-Production-ready: connection pooling, transaction handling, async support.
-Supabase-ready: pooled connection (port 6543), SSL forced via connect_args.
+
+Features:
+• Async SQLAlchemy engine
+• Supabase pooled connection support
+• SSL enforced
+• Connection pooling
+• FastAPI dependency injection
+• Startup connection test
+• Clean shutdown
+• Production-ready stability
 """
 
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
 from sqlalchemy import text
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 
-logger = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────────
-# Global Async Engine (singleton – created once)
+# Logging
 # ────────────────────────────────────────────────
-engine: AsyncEngine = create_async_engine(
-    str(settings.DATABASE_URL),
-    echo=settings.ENVIRONMENT == "development",
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,
-    pool_recycle=600,
-    connect_args={
-        "ssl": True,  # Force SSL for Supabase (required)
-        "server_settings": {"application_name": "cursorcode-api"},
-    },
-)
 
-# Async Session Factory
+logger = logging.getLogger("cursorcode.db")
+
+
+# ────────────────────────────────────────────────
+# Engine Creation
+# ────────────────────────────────────────────────
+
+DATABASE_URL = str(settings.DATABASE_URL)
+
+is_dev = settings.ENVIRONMENT == "development"
+
+
+def create_engine() -> AsyncEngine:
+    """
+    Create Async SQLAlchemy Engine.
+
+    Supabase pooled connection requires SSL.
+    """
+
+    logger.info(f"Creating database engine (env={settings.ENVIRONMENT})")
+
+    return create_async_engine(
+        DATABASE_URL,
+
+        # Debug
+        echo=is_dev,
+
+        # Pool settings
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30,
+        pool_recycle=1800,
+        pool_pre_ping=True,
+
+        # Supabase SSL requirement
+        connect_args={
+            "ssl": True,
+            "server_settings": {
+                "application_name": "cursorcode-api"
+            },
+        },
+
+        # Prevent stale connections
+        poolclass=None if not is_dev else NullPool,
+    )
+
+
+engine: AsyncEngine = create_engine()
+
+
+# ────────────────────────────────────────────────
+# Session Factory
+# ────────────────────────────────────────────────
+
 async_session_factory = async_sessionmaker(
-    engine,
-    expire_on_commit=False,
+    bind=engine,
     class_=AsyncSession,
+    expire_on_commit=False,
 )
 
 
 # ────────────────────────────────────────────────
 # FastAPI Dependency
 # ────────────────────────────────────────────────
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """
+    FastAPI dependency.
+
+    Usage:
+
+    db: AsyncSession = Depends(get_db)
+    """
+
     async with async_session_factory() as session:
+
         try:
+
             yield session
+
             await session.commit()
+
         except Exception:
+
             await session.rollback()
+
             raise
+
         finally:
+
             await session.close()
 
 
 # ────────────────────────────────────────────────
-# Startup: Test connection (non-fatal if fails)
+# Database Health Check
 # ────────────────────────────────────────────────
-async def init_db():
-    db_url = str(settings.DATABASE_URL)
-    logger.info("Testing database connection", extra={"url": db_url})
+
+async def check_db_connection() -> bool:
 
     try:
+
         async with engine.connect() as conn:
+
             result = await conn.execute(text("SELECT 1"))
-            logger.info(
-                "Database connection successful",
-                extra={
-                    "url": db_url,
-                    "first_result": result.scalar(),
-                }
-            )
+
+            return result.scalar() == 1
+
     except Exception as e:
+
+        logger.error("Database health check failed", exc_info=True)
+
+        return False
+
+
+# ────────────────────────────────────────────────
+# Startup Initialization
+# ────────────────────────────────────────────────
+
+async def init_db():
+
+    logger.info("Testing database connection...")
+
+    try:
+
+        async with engine.connect() as conn:
+
+            result = await conn.execute(text("SELECT version()"))
+
+            version = result.scalar()
+
+            logger.info(f"Database connected: {version}")
+
+    except Exception:
+
         logger.critical(
-            "Database connection failed on startup",
-            exc_info=True,
-            extra={
-                "url": db_url,
-                "error_type": type(e).__name__,
-                "error_msg": str(e),
-            }
+
+            "DATABASE CONNECTION FAILED",
+
+            exc_info=True
+
         )
-        # Do NOT raise here – allow app to start (DB routes will 500)
-        # raise RuntimeError("Database unavailable") from e
+
+        # Do not crash app
+        # Supabase may be sleeping
 
 
 # ────────────────────────────────────────────────
-# Lifespan (use in main.py)
+# Lifespan Manager
 # ────────────────────────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app):
-    await init_db()  # Test DB on startup (non-fatal)
+
+    logger.info("Starting CursorCode API...")
+
+    await init_db()
+
     yield
+
+    logger.info("Closing database engine...")
+
     await engine.dispose()
-    logger.info("Database engine disposed on shutdown")
+
+    logger.info("Database engine closed")
 
 
-# Utility for migrations/CLI
+# ────────────────────────────────────────────────
+# Utility
+# ────────────────────────────────────────────────
+
 def get_engine() -> AsyncEngine:
+
     return engine
