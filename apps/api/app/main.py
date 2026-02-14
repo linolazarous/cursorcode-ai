@@ -2,7 +2,7 @@
 CursorCode AI FastAPI Application Entry Point
 Production-ready (February 2026): middleware stack, lifespan, observability, security.
 Supabase-ready: external managed Postgres, no auto-migrations, no engine dispose.
-Custom monitoring: structured logging + Supabase error table + Prometheus /metrics.
+Custom monitoring: structured logging + Supabase error table + Prometheus /metrics (optional).
 """
 
 import logging
@@ -27,12 +27,13 @@ from app.routers import (
     admin,
     monitoring,
 )
-from app.middleware.security import add_security_headers
+from app.middleware.security import SecurityHeadersMiddleware
 from app.middleware.rate_limit import (
     limiter,
     RateLimitMiddleware,
     rate_limit_exceeded_handler,
 )
+
 # Optional Prometheus (safe import)
 try:
     from prometheus_client import generate_latest
@@ -89,11 +90,7 @@ app.add_middleware(
 )
 
 # 2. Security Headers (CSP, HSTS, etc.) – applied to every response
-@app.middleware("http")
-async def security_middleware(request: Request, call_next):
-    response = await call_next(request)
-    add_security_headers(request, response)
-    return response
+app.add_middleware(SecurityHeadersMiddleware)
 
 # 3. Request Logging + Prometheus Metrics (if enabled)
 @app.middleware("http")
@@ -102,7 +99,7 @@ async def metrics_middleware(request: Request, call_next):
     path = request.url.path
     start_time = time.time()
 
-    # Correlation ID
+    # Correlation ID for tracing
     request_id = str(uuid.uuid4())
     request.state.request_id = request_id
 
