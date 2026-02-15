@@ -34,7 +34,7 @@ class Base(DeclarativeBase):
     # Global table args for ALL models — prevents duplicate definition errors
     __table_args__ = {
         "extend_existing": True,  # ← FINAL FIX: allows re-definition of tables during import
-        # "schema": "public",     # uncomment if using PostgreSQL schemas
+        "schema": "public",       # Explicitly set to 'public' for PostgreSQL (e.g., Supabase compatibility)
     }
 
     def __repr__(self) -> str:
