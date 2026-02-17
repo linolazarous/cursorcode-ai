@@ -1,12 +1,36 @@
 {
-"compilerOptions": {
-"target": "es6",
-"module": "commonjs",
-"strict": true,
-"esModuleInterop": true,
-"skipLibCheck": true,
-"forceConsistentCasingInFileNames": true,
-"baseUrl": ".",
-"paths": { "@/": ["./"] }
-}
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "incremental": true,
+    "composite": true,
+    
+    // Base paths for monorepo
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"],
+      "@cursorcode/*": ["../*"],
+      "@cursorcode/ui/*": ["../packages/ui/*"],
+      "@cursorcode/db/*": ["../packages/db/*"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "build",
+    ".next",
+    "out"
+  ]
 }
