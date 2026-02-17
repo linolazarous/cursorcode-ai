@@ -6,9 +6,10 @@
         "name": "next"
       }
     ],
-    // Override paths for the web app (most important for Vercel)
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@cursorcode/types": ["../../packages/types"],
+      "@cursorcode/db": ["../../packages/db"]
     },
     "allowJs": true,
     "jsx": "preserve"
@@ -17,7 +18,8 @@
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
-    ".next/types/**/*.d.ts"
+    ".next/types/**/*.d.ts",
+    "../../packages/types/**/*.d.ts"
   ],
   "exclude": [
     "node_modules",
