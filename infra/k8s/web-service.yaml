@@ -1,0 +1,59 @@
+# infra/k8s/web-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cursorcode-web
+  namespace: default
+  labels:
+    app: cursorcode-web
+    tier: frontend
+spec:
+  type: ClusterIP           # Internal only - Ingress will handle external traffic
+  selector:
+    app: cursorcode-web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+
+---
+# infra/k8s/web-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cursorcode-web
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"   # Change to your issuer
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - cursorcode.ai
+        - www.cursorcode.ai
+      secretName: cursorcode-web-tls
+  rules:
+    - host: cursorcode.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cursorcode-web
+                port:
+                  number: 3000
+    - host: www.cursorcode.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cursorcode-web
+                port:
+                  number: 3000
