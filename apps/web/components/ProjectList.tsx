@@ -1,10 +1,10 @@
 // apps/web/components/ProjectList.tsx
-"use client"
+"use client";
 
-import { useState } from "react"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,43 +15,49 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
-import { Trash2, ExternalLink, Eye } from "lucide-react"
+} from "@/components/ui/alert-dialog";
+import { Trash2, ExternalLink, Eye } from "lucide-react";
 
 interface Project {
-  id: string
-  title: string
-  status: string
-  deploy_url?: string
-  preview_url?: string
-  created_at: string
+  id: string;
+  title: string;
+  status: string;
+  deploy_url?: string;
+  preview_url?: string;
+  created_at: string;
 }
 
 interface ProjectListProps {
-  initialProjects: Project[]
+  initialProjects: Project[];
 }
 
 export default function ProjectList({ initialProjects }: ProjectListProps) {
-  const [projects, setProjects] = useState(initialProjects)
+  const [projects, setProjects] = useState(initialProjects);
 
   const handleDelete = async (id: string) => {
     try {
-      const res = await fetch(`/api/projects/${id}`, { method: "DELETE" })
+      const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
       if (res.ok) {
-        setProjects(projects.filter(p => p.id !== id))
+        setProjects(projects.filter((p) => p.id !== id));
       }
     } catch (err) {
-      console.error(err)
+      console.error(err);
     }
-  }
+  };
 
   return (
     <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-      {projects.map(project => (
-        <Card key={project.id} className="overflow-hidden">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-lg truncate">{project.title}</CardTitle>
+      {projects.map((project) => (
+        <Card
+          key={project.id}
+          className="cyber-card neon-glow group overflow-hidden border-brand-blue/30 hover:border-brand-blue transition-all duration-300"
+        >
+          <CardHeader className="pb-3">
+            <div className="flex items-start justify-between gap-3">
+              <CardTitle className="text-display text-xl leading-tight truncate group-hover:text-brand-glow transition-colors">
+                {project.title || "Untitled Project"}
+              </CardTitle>
+
               <Badge
                 variant={
                   project.status === "completed" || project.status === "deployed"
@@ -60,50 +66,72 @@ export default function ProjectList({ initialProjects }: ProjectListProps) {
                     ? "destructive"
                     : "secondary"
                 }
+                className="neon-glow text-xs font-medium px-3 py-1"
               >
-                {project.status}
+                {project.status.charAt(0).toUpperCase() + project.status.slice(1)}
               </Badge>
             </div>
           </CardHeader>
-          <CardContent className="pb-2">
+
+          <CardContent className="pb-4">
             <p className="text-sm text-muted-foreground">
-              Created: {new Date(project.created_at).toLocaleDateString()}
+              Created {new Date(project.created_at).toLocaleDateString()}
             </p>
           </CardContent>
-          <CardFooter className="flex justify-end gap-2">
+
+          <CardFooter className="flex gap-2 pt-2">
             {project.preview_url && (
-              <Button variant="outline" size="sm" asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="neon-glow flex-1"
+                asChild
+              >
                 <a href={project.preview_url} target="_blank" rel="noopener noreferrer">
                   <Eye className="mr-2 h-4 w-4" />
                   Preview
                 </a>
               </Button>
             )}
+
             {project.deploy_url && (
-              <Button variant="default" size="sm" asChild>
+              <Button
+                variant="default"
+                size="sm"
+                className="neon-glow flex-1"
+                asChild
+              >
                 <a href={project.deploy_url} target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="mr-2 h-4 w-4" />
-                  Deployed
+                  Open App
                 </a>
               </Button>
             )}
+
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button variant="ghost" size="sm">
-                  <Trash2 className="h-4 w-4 text-destructive" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10 neon-glow"
+                >
+                  <Trash2 className="h-4 w-4" />
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Delete Project?</AlertDialogTitle>
+                  <AlertDialogTitle>Delete this project?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This action cannot be undone. The project will be removed permanently.
+                    This action cannot be undone. All code, deployments, and history will be permanently removed.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={() => handleDelete(project.id)}>
-                    Delete
+                  <AlertDialogAction
+                    onClick={() => handleDelete(project.id)}
+                    className="bg-destructive hover:bg-destructive/90"
+                  >
+                    Delete Forever
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -113,10 +141,17 @@ export default function ProjectList({ initialProjects }: ProjectListProps) {
       ))}
 
       {projects.length === 0 && (
-        <div className="col-span-full text-center py-12 text-muted-foreground">
-          No projects yet. Start building with the form above!
+        <div className="col-span-full py-20 text-center">
+          <div className="mx-auto w-16 h-16 rounded-full border border-dashed border-brand-blue/50 flex items-center justify-center mb-6">
+            <Sparkles className="h-8 w-8 text-brand-blue/50" />
+          </div>
+          <h3 className="text-display text-2xl text-muted-foreground">No projects yet</h3>
+          <p className="text-muted-foreground mt-2">Your generated apps will appear here</p>
+          <Button asChild className="neon-glow mt-6" variant="outline">
+            <a href="#create">Create Your First App</a>
+          </Button>
         </div>
       )}
     </div>
-  )
+  );
 }
