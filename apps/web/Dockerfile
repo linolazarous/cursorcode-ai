@@ -1,34 +1,49 @@
 # apps/web/Dockerfile
-FROM node:20-alpine
+# =============================================
+# Production-ready Dockerfile for CursorCode AI Web
+# Multi-stage build • Small image • Security best practices
+# =============================================
+
+# ==================== BUILD STAGE ====================
+FROM node:20-alpine AS builder
+
 WORKDIR /app
+
+# Enable pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Copy package files first (for caching)
+COPY package.json pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
 COPY . .
-RUN pnpm install
+
+# Build the Next.js app (uses output: "standalone" from next.config.mjs)
 RUN pnpm build
-CMD ["pnpm", "start"]
 
-# K8s example: infra/k8s/web-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: web
-spec:
-  replicas: 1
-  template:
-    spec:
-      containers:
-      - name: web
-        image: cursorcode/web:latest
-        envFrom:
-        - secretRef:
-            name: cursorcode-secrets
+# ==================== RUNTIME STAGE ====================
+FROM node:20-alpine AS runner
 
-# GitHub Actions: .github/workflows/deploy.yml
-name: Deploy
-on: push
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - run: docker build -t web .
-    - run: vercel deploy  # Or similar
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+# Copy only the necessary files from builder
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+
+# Create non-root user for security
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+USER nextjs
+
+EXPOSE 3000
+
+# Start the standalone Next.js server
+CMD ["node", "server.js"]
