@@ -6,13 +6,13 @@
         "name": "next"
       }
     ],
+    "baseUrl": ".",
     "paths": {
       "@/*": ["./*"],
       "@cursorcode/types": ["../../packages/types"],
-      "@cursorcode/db": ["../../packages/db"]
-    },
-    "allowJs": true,
-    "jsx": "preserve"
+      "@cursorcode/db": ["../../packages/db"],
+      "@cursorcode/ui": ["../../packages/ui"]
+    }
   },
   "include": [
     "next-env.d.ts",
