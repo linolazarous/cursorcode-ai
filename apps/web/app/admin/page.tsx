@@ -3,12 +3,16 @@ import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+// Update these imports to use the UI package
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@cursorcode/ui";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@cursorcode/ui";
+import { Badge } from "@cursorcode/ui";
+import { Button } from "@cursorcode/ui";
+import { Alert, AlertDescription, AlertTitle } from "@cursorcode/ui";
+
+// Table components might not be in your UI package yet
+// If they are, import them from @cursorcode/ui, otherwise keep as is or add them
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import {
   BarChart,
@@ -92,7 +96,7 @@ export default async function AdminDashboard() {
           {[
             { label: "Total Users", value: stats.totalUsers.toLocaleString(), icon: Users, change: "+12% this month" },
             { label: "Active Subscriptions", value: stats.activeSubscriptions.toLocaleString(), icon: CreditCard, change: "78% retention" },
-            { label: "Monthly Revenue", value: `\[ {stats.monthlyRevenue.toLocaleString()}`, icon: DollarSign, change: "+18.2% this month" },
+            { label: "Monthly Revenue", value: `$${stats.monthlyRevenue.toLocaleString()}`, icon: DollarSign, change: "+18.2% this month" },
             { label: "Total Projects", value: stats.totalProjects.toLocaleString(), icon: Zap, change: `${stats.failedBuilds} failed builds` },
           ].map((stat, i) => (
             <Card key={i} className="cyber-card neon-glow border-brand-blue/30">
@@ -134,7 +138,7 @@ export default async function AdminDashboard() {
                       <YAxis tick={{ fill: "#94A3B8" }} />
                       <Tooltip
                         contentStyle={{ backgroundColor: "#111827", border: "none", borderRadius: "12px" }}
-                        formatter={(value) => [` \]{value.toLocaleString()}`, "Revenue"]}
+                        formatter={(value) => [`$${value.toLocaleString()}`, "Revenue"]}
                       />
                       <Bar dataKey="revenue" fill="#1E88E5" radius={[6, 6, 0, 0]} />
                     </BarChart>
