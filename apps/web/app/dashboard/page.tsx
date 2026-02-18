@@ -7,11 +7,13 @@ import PromptForm from "@/components/PromptForm";
 import ProjectList from "@/components/ProjectList";
 import TwoFASetup from "@/components/2FASetup";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+// Update these imports to use the UI package
+import { Button, Card, Alert } from "@cursorcode/ui";
+import { CardContent, CardHeader, CardTitle, CardDescription } from "@cursorcode/ui";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@cursorcode/ui";
 
+// AlertDialog components might not be in your UI package yet
+// If they are, import them from @cursorcode/ui, otherwise keep as is
 import {
   AlertDialog,
   AlertDialogAction,
