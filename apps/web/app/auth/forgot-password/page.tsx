@@ -8,11 +8,9 @@ import { useForm } from "react-hook-form";
 import * as z from "zod";
 import { Loader2, AlertCircle, CheckCircle2, ArrowLeft } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+// Update these imports to use the UI package
+import { Button, Input, Label, Card, Alert } from "@cursorcode/ui";
+import { CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@cursorcode/ui";
 import { useToast } from "@/components/ui/use-toast";
 
 const formSchema = z.object({
