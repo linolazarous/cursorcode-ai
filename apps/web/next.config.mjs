@@ -9,41 +9,30 @@ const __dirname = path.dirname(__filename);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // ────────────────────────────────────────────────
-  // Basic settings
-  // ────────────────────────────────────────────────
   reactStrictMode: true,
   swcMinify: true,
 
-  // ────────────────────────────────────────────────
-  // Experimental features
-  // ────────────────────────────────────────────────
   experimental: {
     serverActions: {
       bodySizeLimit: "10mb",
     },
+
     optimizePackageImports: [
       "lucide-react",
       "@radix-ui/react-label",
       "class-variance-authority",
     ],
+
+    // ✅ FIX MOVED HERE
+    outputFileTracingRoot: path.join(__dirname, "../../"),
   },
 
-  // ────────────────────────────────────────────────
-  // Monorepo support
-  // ────────────────────────────────────────────────
   transpilePackages: [
     "@cursorcode/ui",
     "@cursorcode/db",
     "@cursorcode/types",
   ],
 
-  // ✅ FIXED dirname usage
-  outputFileTracingRoot: path.join(__dirname, "../../"),
-
-  // ────────────────────────────────────────────────
-  // Images
-  // ────────────────────────────────────────────────
   images: {
     remotePatterns: [
       {
@@ -71,9 +60,6 @@ const nextConfig = {
     formats: ["image/avif", "image/webp"],
   },
 
-  // ────────────────────────────────────────────────
-  // Security headers
-  // ────────────────────────────────────────────────
   async headers() {
     return [
       {
@@ -81,8 +67,7 @@ const nextConfig = {
         headers: [
           {
             key: "Strict-Transport-Security",
-            value:
-              "max-age=31536000; includeSubDomains; preload",
+            value: "max-age=31536000; includeSubDomains; preload",
           },
           {
             key: "X-Content-Type-Options",
@@ -100,26 +85,11 @@ const nextConfig = {
             key: "Referrer-Policy",
             value: "strict-origin-when-cross-origin",
           },
-          {
-            key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://vercel.live https://*.vercel-scripts.com",
-              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-              "font-src 'self' https://fonts.gstatic.com",
-              "img-src 'self' data: blob: https://images.unsplash.com https://api.dicebear.com https://*.cursorcode.app",
-              "connect-src 'self' https://api.x.ai https://api.stripe.com https://*.cursorcode.app https://cursorcode-ai.onrender.com",
-              "frame-ancestors 'none'",
-            ].join("; "),
-          },
         ],
       },
     ];
   },
 
-  // ────────────────────────────────────────────────
-  // Output standalone
-  // ────────────────────────────────────────────────
   output: "standalone",
 
   async redirects() {
