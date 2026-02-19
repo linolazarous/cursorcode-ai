@@ -3,13 +3,31 @@ import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@cursorcode/ui";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@cursorcode/ui";
-import { Badge } from "@cursorcode/ui";
-import { Button } from "@cursorcode/ui";
-import { Alert, AlertDescription, AlertTitle } from "@cursorcode/ui";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Badge,
+  Button,
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@cursorcode/ui";
 
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 import {
   BarChart,
@@ -64,6 +82,7 @@ export default async function AdminDashboard() {
   return (
     <div className="min-h-screen storyboard-grid bg-background py-10">
       <div className="container mx-auto px-6 max-w-7xl space-y-12">
+
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
           <div>
@@ -132,7 +151,7 @@ export default async function AdminDashboard() {
                       <YAxis tick={{ fill: "#94A3B8" }} />
                       <Tooltip
                         contentStyle={{ backgroundColor: "#111827", border: "none", borderRadius: "12px" }}
-                        formatter={(value) => [` \]{value.toLocaleString()}`, "Revenue"]}
+                        formatter={(value: number) => [` \]{value.toLocaleString()}`, "Revenue"]}
                       />
                       <Bar dataKey="revenue" fill="#1E88E5" radius={[6, 6, 0, 0]} />
                     </BarChart>
