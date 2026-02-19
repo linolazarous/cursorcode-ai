@@ -39,7 +39,6 @@
     "usehooks-ts": "3.1.1",
     "@tanstack/react-query": "5.66.0",
 
-    // Shared workspace packages (critical for monorepo)
     "@cursorcode/ui": "workspace:*",
     "@cursorcode/db": "workspace:*",
     "@cursorcode/types": "workspace:*"
