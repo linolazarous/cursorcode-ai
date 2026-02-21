@@ -4,15 +4,18 @@ import { signOut } from "next-auth/react";
 
 /**
  * Centralized Axios instance for CursorCode AI Frontend
- * - Automatically includes credentials (cookies)
- * - Global error handling (401 → auto sign out)
+ * 
+ * Features:
+ * - Automatic credentials (cookies) for auth with Render backend
+ * - Global 401 handling → auto sign out
  * - Request/response interceptors
- * - Timeout & logging for debugging
+ * - Timeout protection
+ * - Development logging
  */
 
 const api: AxiosInstance = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
-  withCredentials: true,           // Critical for httpOnly cookies with Render backend
+  withCredentials: true,           // Critical for httpOnly cookies
   timeout: 15000,                  // 15 seconds
   headers: {
     "Content-Type": "application/json",
@@ -24,9 +27,8 @@ const api: AxiosInstance = axios.create({
 // ────────────────────────────────────────────────
 api.interceptors.request.use(
   (config) => {
-    // Optional: Add any dynamic headers here in the future
     if (process.env.NODE_ENV === "development") {
-      console.log(`🚀 [API Request] ${config.method?.toUpperCase()} ${config.url}`);
+      console.log(`🚀 [API] ${config.method?.toUpperCase()} ${config.url}`);
     }
     return config;
   },
@@ -42,11 +44,10 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config;
 
-    // Handle 401 Unauthorized → Auto sign out
+    // Global 401 handler — auto sign out
     if (error.response?.status === 401) {
       console.warn("🔑 Session expired or invalid. Signing out...");
 
-      // Prevent infinite loop
       if (!originalRequest?._retry) {
         originalRequest!._retry = true;
 
@@ -58,7 +59,7 @@ api.interceptors.response.use(
       }
     }
 
-    // Log errors in development
+    // Development logging
     if (process.env.NODE_ENV === "development") {
       console.error(
         `❌ [API Error] ${error.response?.status} ${originalRequest?.method?.toUpperCase()} ${originalRequest?.url}`,
