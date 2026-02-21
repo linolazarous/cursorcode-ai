@@ -33,7 +33,7 @@ if (typeof window !== "undefined") {
 }
 
 // ────────────────────────────────────────────────
-// Fonts (matching logo + video)
+// Fonts — matching logo + video storyboard
 // ────────────────────────────────────────────────
 const inter = Inter({
   subsets: ["latin"],
