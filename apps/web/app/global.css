@@ -50,13 +50,14 @@
     box-shadow: 
       0 0 15px hsl(var(--accent) / 0.6),
       0 0 30px hsl(var(--primary) / 0.4);
-    transition: box-shadow 0.3s ease;
+    transition: box-shadow 0.3s ease, transform 0.2s ease;
   }
 
   .neon-glow:hover {
     box-shadow: 
       0 0 25px hsl(var(--accent)),
       0 0 50px hsl(var(--primary));
+    transform: translateY(-1px);
   }
 
   /* Logo cursor effect */
@@ -103,21 +104,3 @@
     outline-offset: 3px;
   }
 }
-
-/* Optional subtle scanline effect (uncomment if you want extra cyber feel) */
-/* body::after {
-  content: '';
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: repeating-linear-gradient(
-    transparent 0px,
-    transparent 2px,
-    rgba(103, 232, 249, 0.03) 2px,
-    rgba(103, 232, 249, 0.03) 4px
-  );
-  pointer-events: none;
-  z-index: 9999;
-} */
