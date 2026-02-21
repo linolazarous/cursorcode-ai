@@ -7,24 +7,31 @@ import PromptForm from "@/components/PromptForm";
 import ProjectList from "@/components/ProjectList";
 import TwoFASetup from "@/components/2FASetup";
 
-// Update these imports to use the UI package
-import { Button, Card, Alert } from "@cursorcode/ui";
-import { CardContent, CardHeader, CardTitle, CardDescription } from "@cursorcode/ui";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@cursorcode/ui";
-
-// AlertDialog components might not be in your UI package yet
-// If they are, import them from @cursorcode/ui, otherwise keep as is
+// All UI components from the shared @cursorcode/ui package
 import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Alert,
+  AlertDescription,
+  AlertTitle,
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
-  AlertDialogDescription,
+  AlertDialogDescription as AlertDialogDesc,
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+} from "@cursorcode/ui";
 
 import { ShieldCheck, AlertCircle, CheckCircle2 } from "lucide-react";
 import { Suspense } from "react";
@@ -97,9 +104,9 @@ export default async function DashboardPage() {
                   <AlertDialogContent>
                     <AlertDialogHeader>
                       <AlertDialogTitle>Disable Two-Factor Authentication?</AlertDialogTitle>
-                      <AlertDialogDescription>
+                      <AlertDialogDesc>
                         This will lower your account security. You will need a current 2FA code or backup code to confirm.
-                      </AlertDialogDescription>
+                      </AlertDialogDesc>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
