@@ -4,10 +4,10 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 
-// Update these imports to use the UI package
+// All UI components from the shared @cursorcode/ui package
 import { Button, Card, CardContent } from "@cursorcode/ui";
 
-import { ArrowRight, Sparkles, Zap, Shield, Rocket, Play, Pause } from "lucide-react";
+import { ArrowRight, Sparkles, Zap, Rocket, Play, Pause } from "lucide-react";
 
 export default function LandingPage() {
   const [demoPrompt, setDemoPrompt] = useState("");
@@ -17,7 +17,7 @@ export default function LandingPage() {
 
   const examplePrompt = "Build a fitness tracking SaaS with Apple Watch sync, streak counters, and AI workout suggestions";
 
-  // Typing animation
+  // Typing animation for live demo
   useEffect(() => {
     if (isTyping) {
       let i = 0;
@@ -32,7 +32,7 @@ export default function LandingPage() {
       }, 50);
       return () => clearInterval(interval);
     }
-  }, [isTyping, examplePrompt]);
+  }, [isTyping]);
 
   const playDemo = () => {
     setIsTyping(true);
@@ -54,7 +54,7 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen storyboard-grid bg-background text-foreground overflow-hidden">
-      {/* Navbar - unchanged but with glow */}
+      {/* Navbar */}
       <nav className="fixed top-0 left-0 right-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl">
         <div className="container mx-auto px-6 py-5 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -75,28 +75,28 @@ export default function LandingPage() {
         </div>
       </nav>
 
-      {/* HERO - Enhanced with floating animation */}
+      {/* HERO */}
       <section className="pt-32 pb-24 relative">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,#1E88E520_0%,transparent_70%)]" />
         <div className="container mx-auto px-6 text-center max-w-5xl relative z-10">
           <div className="inline-flex items-center gap-3 mb-6 px-6 py-2 rounded-full border border-brand-blue/30 bg-card/50 animate-pulse">
             <Sparkles className="h-5 w-5 text-brand-glow" />
-            <span className="text-sm font-medium text-brand-glow">Powered by xAI's Grok • Public Beta</span>
+            <span className="text-sm font-medium text-brand-glow">Powered by xAI’s Grok • Public Beta</span>
           </div>
 
-          <h1 className="text-display text-7xl md:text-8xl font-bold tracking-tighter leading-none mb-6 animate-fade-in">
+          <h1 className="text-display text-7xl md:text-8xl font-bold tracking-tighter leading-none mb-6">
             Build Anything.<br />
             <span className="bg-gradient-to-r from-brand-blue via-brand-glow to-brand-blue bg-clip-text text-transparent">
               Automatically.
             </span>
           </h1>
 
-          <p className="text-2xl text-muted-foreground max-w-2xl mx-auto mb-10 animate-fade-in delay-200">
-            The world's most powerful autonomous AI software engineering platform.<br />
+          <p className="text-2xl text-muted-foreground max-w-2xl mx-auto mb-10">
+            The world’s most powerful autonomous AI software engineering platform.<br />
             Natural language → full-stack app in minutes.
           </p>
 
-          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center animate-fade-in delay-400">
+          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
             <Button size="lg" className="neon-glow text-xl h-14 px-10" asChild>
               <Link href="/auth/signup">Start Building Free →</Link>
             </Button>
@@ -107,7 +107,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* LIVE PROMPT DEMO - The Star of the Show */}
+      {/* LIVE PROMPT DEMO */}
       <section id="demo" className="py-24 border-t border-border bg-black/40">
         <div className="container mx-auto px-6">
           <div className="max-w-4xl mx-auto text-center mb-12">
@@ -168,16 +168,14 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Rest of the page sections would go here (How it works, Features, etc.) */}
-
       {/* FINAL CTA */}
       <section className="py-24 border-t border-border">
         <div className="container mx-auto px-6 text-center">
           <div className="max-w-2xl mx-auto">
-            <h2 className="text-display text-6xl font-bold tracking-tighter mb-6 animate-fade-in">
+            <h2 className="text-display text-6xl font-bold tracking-tighter mb-6">
               Ready to replace your entire dev team?
             </h2>
-            <p className="text-2xl text-muted-foreground mb-10 animate-fade-in delay-200">
+            <p className="text-2xl text-muted-foreground mb-10">
               Join thousands of builders using CursorCode AI today.
             </p>
             <Button size="lg" className="neon-glow text-2xl h-16 px-16" asChild>
@@ -187,7 +185,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Footer - Updated with dynamic year */}
+      {/* Footer */}
       <footer className="border-t border-border py-16 bg-card">
         <div className="container mx-auto px-6 text-center text-sm text-muted-foreground">
           © {currentYear} CursorCode AI • Built with Grok by xAI • All rights reserved
