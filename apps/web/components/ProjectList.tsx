@@ -2,10 +2,16 @@
 "use client";
 
 import { useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+
+// All UI components from the shared @cursorcode/ui package
 import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -15,8 +21,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { Trash2, ExternalLink, Eye } from "lucide-react";
+} from "@cursorcode/ui";
+
+import { Trash2, ExternalLink, Eye, Sparkles } from "lucide-react";
 
 interface Project {
   id: string;
