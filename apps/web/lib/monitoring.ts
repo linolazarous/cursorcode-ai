@@ -5,8 +5,6 @@
  * No third-party services (no Sentry).
  */
 
-import { isDevelopment } from "@/lib/utils"; // Optional helper if you have one
-
 export async function reportFrontendError(
   error: Error | string,
   extra: Record<string, any> = {}
@@ -36,7 +34,7 @@ export async function reportFrontendError(
     if (!res.ok) {
       const errorText = await res.text().catch(() => "Unknown error");
       console.warn("[Monitoring] Failed to report to backend:", errorText);
-    } else if (isDevelopment) {
+    } else if (process.env.NODE_ENV === "development") {
       console.log("[Monitoring] Error reported successfully:", message);
     }
   } catch (reportErr) {
