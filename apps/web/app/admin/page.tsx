@@ -1,6 +1,6 @@
 // apps/web/app/admin/page.tsx
 import { redirect } from "next/navigation";
-import { getServerSession } from "next-auth/next";
+import { getServerSession } from "next-auth";           // ← Fixed for NextAuth v5
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 // All UI components from the shared @cursorcode/ui package
