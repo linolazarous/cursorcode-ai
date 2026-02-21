@@ -28,7 +28,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table"; // Keep this for now if Table is not in @cursorcode/ui yet
+} from "@/components/ui/table";
 
 import {
   BarChart,
