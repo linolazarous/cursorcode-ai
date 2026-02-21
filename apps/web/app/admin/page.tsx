@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
+// All UI components from the shared @cursorcode/ui package
 import {
   Card,
   CardContent,
@@ -27,7 +28,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
+} from "@/components/ui/table"; // Keep this for now if Table is not in @cursorcode/ui yet
 
 import {
   BarChart,
