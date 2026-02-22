@@ -77,7 +77,7 @@ export const authOptions = {
     async jwt({ token, user }: { token: JWT; user?: User }) {
       if (user) {
         token.id = user.id;
-        token.email = user.email ?? "";           // ← Fixed: safe fallback
+        token.email = user.email ?? "";          // ← Safe fallback to avoid type error
         token.roles = user.roles;
         token.org_id = user.org_id;
         token.plan = user.plan;
