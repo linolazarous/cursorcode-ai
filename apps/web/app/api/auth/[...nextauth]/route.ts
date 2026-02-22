@@ -8,6 +8,7 @@ import NextAuth from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import GitHubProvider from "next-auth/providers/github";
+import type { JWT } from "next-auth/jwt"; // ← Added for TypeScript
 
 export const authOptions = {
   providers: [
@@ -75,7 +76,7 @@ export const authOptions = {
   ],
 
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user }: { token: JWT; user?: any }) {   // ← Fixed with types
       if (user) {
         token.id = user.id;
         token.email = user.email;
@@ -122,7 +123,7 @@ export const authOptions = {
   },
 
   secret: process.env.NEXTAUTH_SECRET,
-  trustHost: true, // Critical for Vercel custom domains
+  trustHost: true,
 };
 
 // Export handlers for Vercel / App Router
