@@ -6,7 +6,6 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 
-// All UI components from the shared @cursorcode/ui package
 import {
   Button,
   Input,
@@ -28,12 +27,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-  toast, // ← direct Sonner import (consistent with all other pages)
+  toast,
 } from "@cursorcode/ui";
 
 import { Copy, Loader2, CheckCircle2, XCircle, ShieldCheck } from "lucide-react";
 import { useCopyToClipboard } from "usehooks-ts";
 import { useSession } from "next-auth/react";
+import api from "@/lib/api";
 
 const formSchema = z.object({
   code: z.string().length(6, "Must be exactly 6 digits").regex(/^\d{6}$/, "Must be numeric"),
@@ -73,18 +73,9 @@ export default function TwoFASetup({ onSuccess, mode = "enable" }: TwoFASetupPro
     setError(null);
 
     try {
-      const res = await fetch("/api/auth/2fa/enable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-      });
+      const res = await api.post("/auth/2fa/enable");
+      const data = res.data;
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.detail || "Failed to enable 2FA");
-      }
-
-      const data = await res.json();
       setQrCode(data.qr_code_base64);
       setSecret(data.secret);
       setBackupCodes(data.backup_codes);
@@ -94,10 +85,8 @@ export default function TwoFASetup({ onSuccess, mode = "enable" }: TwoFASetupPro
         description: "Scan the QR code with your authenticator app.",
       });
     } catch (err: any) {
-      setError(err.message);
-      toast.error("Setup Failed", {
-        description: err.message,
-      });
+      setError(err.response?.data?.detail || err.message);
+      toast.error("Setup Failed", { description: err.response?.data?.detail || err.message });
     } finally {
       setIsLoading(false);
     }
@@ -109,17 +98,7 @@ export default function TwoFASetup({ onSuccess, mode = "enable" }: TwoFASetupPro
     setError(null);
 
     try {
-      const res = await fetch("/api/auth/2fa/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: data.code }),
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.detail || "Invalid code");
-      }
+      await api.post("/auth/2fa/verify", { code: data.code });
 
       await update({ totp_enabled: true });
 
@@ -136,16 +115,14 @@ export default function TwoFASetup({ onSuccess, mode = "enable" }: TwoFASetupPro
 
       onSuccess?.();
     } catch (err: any) {
-      setError(err.message);
-      toast.error("Verification Failed", {
-        description: err.message,
-      });
+      setError(err.response?.data?.detail || err.message);
+      toast.error("Verification Failed", { description: err.response?.data?.detail || err.message });
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Disable 2FA
+  // Disable 2FA (note: backend route must exist; placeholder kept)
   const disable2FA = async () => {
     setIsLoading(true);
     setError(null);
@@ -154,17 +131,7 @@ export default function TwoFASetup({ onSuccess, mode = "enable" }: TwoFASetupPro
       const code = prompt("Enter your current 2FA code or a backup code:");
       if (!code) return;
 
-      const res = await fetch("/api/auth/2fa/disable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.detail || "Invalid code");
-      }
+      await api.post("/auth/2fa/disable", { code });
 
       await update({ totp_enabled: false });
 
@@ -175,10 +142,8 @@ export default function TwoFASetup({ onSuccess, mode = "enable" }: TwoFASetupPro
       setIsEnabled(false);
       onSuccess?.();
     } catch (err: any) {
-      setError(err.message);
-      toast.error("Disable Failed", {
-        description: err.message,
-      });
+      setError(err.response?.data?.detail || err.message);
+      toast.error("Disable Failed", { description: err.response?.data?.detail || err.message });
     } finally {
       setIsLoading(false);
     }
@@ -187,18 +152,14 @@ export default function TwoFASetup({ onSuccess, mode = "enable" }: TwoFASetupPro
   const copySecret = () => {
     if (secret) {
       copyToClipboard(secret);
-      toast.success("Secret Copied", {
-        description: "Manual entry key copied",
-      });
+      toast.success("Secret Copied", { description: "Manual entry key copied" });
     }
   };
 
   const copyBackupCodes = () => {
     if (backupCodes.length) {
       copyToClipboard(backupCodes.join("\n"));
-      toast.success("Backup Codes Copied", {
-        description: "Save these securely!",
-      });
+      toast.success("Backup Codes Copied", { description: "Save these securely!" });
     }
   };
 
