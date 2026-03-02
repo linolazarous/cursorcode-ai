@@ -6,7 +6,6 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 
-// All UI components from the shared @cursorcode/ui package
 import {
   Button,
   Textarea,
@@ -15,12 +14,13 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  toast, // ← direct Sonner import (consistent pattern)
+  toast,
 } from "@cursorcode/ui";
 
 import { Loader2, Copy, Send, CheckCircle2 } from "lucide-react";
 import { useCopyToClipboard } from "usehooks-ts";
 import { useRouter } from "next/navigation";
+import api from "@/lib/api";
 
 const formSchema = z.object({
   prompt: z.string().min(10, "Prompt must be at least 10 characters").max(2000, "Prompt too long"),
@@ -62,16 +62,13 @@ export default function PromptForm() {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [statusHistory]);
 
-  // Poll project status
+  // Poll project status using centralized api
   useEffect(() => {
     if (!projectId || !isPolling) return;
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/projects/${projectId}`, { credentials: "include" });
-        if (!res.ok) throw new Error("Failed to fetch status");
-
-        const data = await res.json();
+        const { data } = await api.get(`/projects/${projectId}`);
 
         setStatusHistory((prev) => {
           const last = prev[prev.length - 1];
@@ -113,19 +110,9 @@ export default function PromptForm() {
     setIsPolling(false);
 
     try {
-      const res = await fetch("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-        credentials: "include",
-      });
+      const res = await api.post("/projects", data);
+      const result = res.data;
 
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.detail || "Failed to start generation");
-      }
-
-      const result = await res.json();
       setProjectId(result.project_id);
       setIsPolling(true);
 
@@ -136,7 +123,7 @@ export default function PromptForm() {
       reset();
     } catch (error: any) {
       toast.error("Generation Failed", {
-        description: error.message || "Please try again.",
+        description: error.response?.data?.detail || error.message || "Please try again.",
       });
     } finally {
       setIsSubmitting(false);
@@ -145,9 +132,7 @@ export default function PromptForm() {
 
   const copyPrompt = () => {
     copyToClipboard(promptValue);
-    toast.success("Prompt Copied", {
-      description: "Ready to reuse",
-    });
+    toast.success("Prompt Copied", { description: "Ready to reuse" });
   };
 
   return (
@@ -214,7 +199,6 @@ export default function PromptForm() {
           </CardHeader>
 
           <CardContent className="pt-6 space-y-6">
-            {/* Progress Bar */}
             {statusHistory.length > 0 && (
               <div>
                 <div className="flex justify-between text-xs mb-2 text-muted-foreground">
@@ -228,10 +212,9 @@ export default function PromptForm() {
               </div>
             )}
 
-            {/* Live Logs */}
             <div>
               <div className="text-sm font-medium mb-3 text-brand-glow">AGENT LOGS</div>
-              <div className="bg-black/80 border border-brand-blue/30 rounded-2xl p-5 max-h-80 overflow-y-auto font-mono text-xs leading-relaxed text-brand-glow/90">
+              <div className="bg-black/80 border border-brand-blue/30 rounded-2xl p-5 max-h-80 overflow-y-auto font-mono text-xs leading-relaxed text-brand-glow/90 terminal-log">
                 {statusHistory.length > 0 ? (
                   statusHistory.map((step, i) => (
                     <div key={i} className="py-2 border-b border-white/10 last:border-0">
@@ -246,7 +229,6 @@ export default function PromptForm() {
               </div>
             </div>
 
-            {/* Actions */}
             <div className="flex gap-3">
               {projectId && (
                 <Button variant="default" className="neon-glow flex-1" asChild>
