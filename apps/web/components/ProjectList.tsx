@@ -3,7 +3,6 @@
 
 import { useState } from "react";
 
-// All UI components from the shared @cursorcode/ui package
 import {
   Badge,
   Button,
@@ -21,9 +20,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
+  toast,
 } from "@cursorcode/ui";
 
-import { Trash2, ExternalLink, Eye, Sparkles } from "lucide-react";
+import { Trash2, ExternalLink, Eye, Sparkles, Loader2 } from "lucide-react";
+import api from "@/lib/api";
 
 interface Project {
   id: string;
@@ -40,15 +41,21 @@ interface ProjectListProps {
 
 export default function ProjectList({ initialProjects }: ProjectListProps) {
   const [projects, setProjects] = useState(initialProjects);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const handleDelete = async (id: string) => {
+    setDeletingId(id);
     try {
-      const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        setProjects(projects.filter((p) => p.id !== id));
-      }
+      await api.delete(`/projects/${id}`);
+      setProjects((prev) => prev.filter((p) => p.id !== id));
+      toast.success("Project deleted", {
+        description: "All code, deployments, and history have been permanently removed.",
+      });
     } catch (err) {
+      toast.error("Failed to delete project");
       console.error(err);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -110,9 +117,14 @@ export default function ProjectList({ initialProjects }: ProjectListProps) {
                 <Button
                   variant="ghost"
                   size="sm"
+                  disabled={deletingId === project.id}
                   className="text-destructive hover:text-destructive hover:bg-destructive/10 neon-glow"
                 >
-                  <Trash2 className="h-4 w-4" />
+                  {deletingId === project.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
