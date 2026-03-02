@@ -48,7 +48,7 @@ export function CreditMeter({ credits, plan }: CreditMeterProps) {
 
         {isLow && (
           <p className="text-xs text-destructive mt-3 flex items-center gap-1.5 font-medium">
-            ⚠️ Low credits — Upgrade to keep building
+            ⚠️ Low credits — <span className="underline">Upgrade now</span> to keep building
           </p>
         )}
 
