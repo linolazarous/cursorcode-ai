@@ -1,21 +1,18 @@
 // apps/web/lib/api.ts
 import axios, { AxiosInstance, AxiosError } from "axios";
-import { signOut } from "./auth";   // ← Relative import (same folder) — fixes build immediately
+import { signOut } from "./auth";
 
 /**
- * Centralized Axios instance for CursorCode AI Frontend
+ * Centralized Axios instance for CursorCode AI
  *
  * Features:
- * - Automatically includes credentials (httpOnly cookies)
- * - Global 401 handling → auto sign out + redirect
- * - Request/response interceptors with logging
- * - Timeout protection
- * - Fully compatible with NextAuth v5 (Auth.js)
+ * - Automatic httpOnly cookie handling (matches your FastAPI backend)
+ * - Global 401 → auto sign-out + redirect to signin
+ * - Request/response logging in development
+ * - Built-in retry for transient errors
+ * - Fully compatible with NextAuth v5 + direct FastAPI auth
  */
 
-// ────────────────────────────────────────────────
-// Extend Axios types for our custom retry flag
-// ────────────────────────────────────────────────
 declare module "axios" {
   export interface InternalAxiosRequestConfig {
     _retry?: boolean;
@@ -24,8 +21,8 @@ declare module "axios" {
 
 const api: AxiosInstance = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
-  withCredentials: true,           // Critical for cookie-based auth
-  timeout: 15000,                  // 15 seconds
+  withCredentials: true,        // ← Critical for your cookie-based auth
+  timeout: 15000,
   headers: {
     "Content-Type": "application/json",
   },
@@ -37,7 +34,7 @@ const api: AxiosInstance = axios.create({
 api.interceptors.request.use(
   (config) => {
     if (process.env.NODE_ENV === "development") {
-      console.log(`🚀 [API Request] ${config.method?.toUpperCase()} ${config.url}`);
+      console.log(`🚀 [API] ${config.method?.toUpperCase()} ${config.url}`);
     }
     return config;
   },
@@ -45,31 +42,37 @@ api.interceptors.request.use(
 );
 
 // ────────────────────────────────────────────────
-// Response Interceptor
+// Response Interceptor (401 + retry logic)
 // ────────────────────────────────────────────────
 api.interceptors.response.use(
   (response) => response,
 
   async (error: AxiosError) => {
-    const originalRequest = error.config;
+    const originalRequest = error.config as any;
 
-    // Handle 401 Unauthorized → Auto sign out
-    if (error.response?.status === 401) {
-      console.warn("🔑 Session expired or invalid. Signing out...");
+    // 401 → Session expired → sign out
+    if (error.response?.status === 401 && !originalRequest?._retry) {
+      console.warn("🔑 Session expired. Signing out...");
+      originalRequest._retry = true;
 
-      // Prevent infinite loop
-      if (!originalRequest?._retry) {
-        originalRequest!._retry = true;
-
-        try {
-          await signOut({ redirect: true, callbackUrl: "/auth/signin" });
-        } catch (signOutError) {
-          console.error("Sign out failed:", signOutError);
-        }
+      try {
+        await signOut({ redirect: true, callbackUrl: "/auth/signin" });
+      } catch (e) {
+        console.error("Sign-out failed:", e);
       }
+      return Promise.reject(error);
     }
 
-    // Log errors in development only
+    // Optional: simple retry for network flakes (max 1 retry)
+    if (
+      !originalRequest?._retry &&
+      (error.code === "ECONNABORTED" || error.response?.status >= 500)
+    ) {
+      originalRequest._retry = true;
+      return api(originalRequest);
+    }
+
+    // Dev error logging
     if (process.env.NODE_ENV === "development") {
       console.error(
         `❌ [API Error] ${error.response?.status} ${originalRequest?.method?.toUpperCase()} ${originalRequest?.url}`,
