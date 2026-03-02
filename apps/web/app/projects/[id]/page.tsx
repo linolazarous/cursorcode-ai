@@ -1,8 +1,7 @@
 // apps/web/app/projects/[id]/page.tsx
 import { notFound, redirect } from "next/navigation";
-import { auth } from "../../../lib/auth";  // Fixed import - using alias
+import { auth } from "../../../lib/auth";
 
-// All UI components from the shared @cursorcode/ui package
 import {
   Badge,
   Button,
@@ -27,7 +26,7 @@ import {
   toast,
 } from "@cursorcode/ui";
 
-import { Copy, ExternalLink, Eye, Trash2, AlertCircle } from "lucide-react";
+import { Copy, ExternalLink, Eye, Trash2, AlertCircle, Loader2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface Project {
@@ -77,10 +76,9 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
 
   const projectId = params.id;
 
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects/${projectId}`, {
-    headers: {
-      Cookie: `access_token=${session.accessToken || ""}`,
-    },
+  // Updated fetch: uses cookies automatically (consistent with dashboard, signin, etc.)
+  const res = await fetch(`\( {process.env.NEXT_PUBLIC_API_URL}/projects/ \){projectId}`, {
+    credentials: "include",
     cache: "no-store",
   });
 
@@ -207,7 +205,11 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                           onClick={async () => {
-                            await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+                            // Updated to call backend directly (consistent with everything else)
+                            await fetch(`\( {process.env.NEXT_PUBLIC_API_URL}/projects/ \){project.id}`, {
+                              method: "DELETE",
+                              credentials: "include",
+                            });
                             window.location.href = "/dashboard";
                           }}
                           className="bg-destructive hover:bg-destructive/90"
@@ -234,10 +236,7 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
                     <span>Current Stage</span>
                     <span className="text-brand-glow">{project.current_agent || "Initializing..."}</span>
                   </div>
-                  <Progress
-                    value={project.progress || 0}
-                    className="h-3 bg-muted"
-                  />
+                  <Progress value={project.progress || 0} className="h-3 bg-muted" />
                 </div>
 
                 <div>
@@ -291,6 +290,3 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
     </div>
   );
 }
-
-
-
