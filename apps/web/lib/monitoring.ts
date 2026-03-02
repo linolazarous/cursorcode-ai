@@ -2,8 +2,8 @@
 /**
  * Frontend Error Monitoring for CursorCode AI
  *
- * Sends client-side errors to /api/monitoring/error for logging.
- * Uses the centralized api.ts for consistency with auth & all other calls.
+ * Catches all client-side errors and reports them to the backend
+ * using the centralized api.ts (with automatic cookie auth).
  */
 
 import api from "./api";
@@ -20,6 +20,7 @@ export async function reportFrontendError(
     const stack = error instanceof Error ? error.stack : undefined;
 
     const payload = {
+      level: "error",
       message,
       stack,
       url: typeof window !== "undefined" ? window.location.href : "server",
@@ -28,14 +29,14 @@ export async function reportFrontendError(
       ...extra,
     };
 
-    // ✅ Updated to match the actual route we created
-    await api.post("/api/monitoring/error", payload);
+    // Matches your backend router: app.include_router(monitoring.router, prefix="/monitoring")
+    await api.post("/monitoring/error", payload);
 
     if (process.env.NODE_ENV === "development") {
-      console.log("[Monitoring] Error reported successfully:", message);
+      console.log("[Monitoring] Error reported:", message);
     }
   } catch (reportErr) {
-    // Fail silently in production to avoid cascading errors
+    // Fail silently in production
     if (process.env.NODE_ENV === "development") {
       console.error("[Monitoring] Reporting failed:", reportErr);
     }
@@ -43,14 +44,8 @@ export async function reportFrontendError(
 }
 
 // ────────────────────────────────────────────────
-// Global Error Handlers (Client-Side Only)
+// Global Error Handlers (runs once per page load)
 // ────────────────────────────────────────────────
-declare global {
-  interface Window {
-    __monitoringInitialized?: boolean;
-  }
-}
-
 if (typeof window !== "undefined" && !window.__monitoringInitialized) {
   window.__monitoringInitialized = true;
 
@@ -63,7 +58,6 @@ if (typeof window !== "undefined" && !window.__monitoringInitialized) {
       line,
       col,
     });
-
     if (originalOnError) originalOnError(msg, url, line, col, error);
     return false;
   };
@@ -71,10 +65,7 @@ if (typeof window !== "undefined" && !window.__monitoringInitialized) {
   // Catch unhandled promise rejections
   const originalOnUnhandledRejection = window.onunhandledrejection;
   window.onunhandledrejection = (event) => {
-    reportFrontendError(event.reason, {
-      source: "unhandledrejection",
-    });
-
+    reportFrontendError(event.reason, { source: "unhandledrejection" });
     if (originalOnUnhandledRejection) {
       originalOnUnhandledRejection.call(window, event);
     }
