@@ -1,23 +1,24 @@
+/* apps/web/app/globals.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* ============================================= */
-/* 1. Base Theme Variables (dark cyber theme)   */
+/* 1. Base Theme Variables (Cyber-Neon Dark)    */
 /* ============================================= */
 @layer base {
   :root {
-    --background: 10 10 10;      /* #0A0A0A */
-    --foreground: 241 245 249;   /* #F1F5F9 */
-    --card: 17 24 39;            /* #111827 */
+    --background: 10 10 10;
+    --foreground: 241 245 249;
+    --card: 17 24 39;
     --card-foreground: 241 245 249;
     --popover: 17 24 39;
     --popover-foreground: 241 245 249;
-    --primary: 30 136 229;       /* Brand Blue #1E88E5 */
+    --primary: 30 136 229;       /* Brand Blue */
     --primary-foreground: 255 255 255;
     --secondary: 51 65 85;
     --secondary-foreground: 226 232 240;
-    --accent: 103 232 249;       /* Neon Glow #67E8F9 */
+    --accent: 103 232 249;       /* Neon Glow */
     --accent-foreground: 15 23 42;
     --muted: 30 41 55;
     --muted-foreground: 148 163 184;
@@ -48,12 +49,12 @@
 /* 2. Component Layer – Neon / Cyber Styles     */
 /* ============================================= */
 @layer components {
-  /* Neon glow toned down for better readability */
+  /* Neon glow (optimized performance) */
   .neon-glow {
     box-shadow: 
-      0 0 8px hsl(var(--accent) / 0.5),
-      0 0 20px hsl(var(--brand-blue) / 0.3);
-    transition: all 0.3s ease;
+      0 0 8px hsl(var(--accent) / 0.6),
+      0 0 20px hsl(var(--brand-blue) / 0.4);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .neon-glow:hover {
@@ -63,12 +64,7 @@
     transform: translateY(-2px);
   }
 
-  /* Logo cursor effect */
-  .logo-cursor {
-    filter: drop-shadow(0 0 15px hsl(var(--brand-blue)));
-  }
-
-  /* Futuristic card for demo video */
+  /* Futuristic cards */
   .cyber-card {
     background-color: hsl(var(--card));
     border: 1px solid hsl(var(--border));
@@ -80,24 +76,18 @@
     transform: translateY(-4px);
   }
 
-  /* Mobile menu slide-in */
-  .mobile-menu {
-    animation: slideDown 0.3s ease-out forwards;
+  /* Storyboard grid background (used on every page) */
+  .storyboard-grid {
+    background-image: 
+      linear-gradient(rgba(30, 136, 229, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(30, 136, 229, 0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
   }
 
-  @keyframes slideDown {
-    from { opacity: 0; transform: translateY(-20px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  /* Video play button (less aggressive glow) */
-  .video-play-btn {
-    box-shadow: 0 0 20px hsl(var(--accent) / 0.6);
-    transition: all 0.2s ease;
-  }
-  .video-play-btn:hover {
-    box-shadow: 0 0 40px hsl(var(--accent));
-    transform: scale(1.05);
+  /* Terminal / logs styling */
+  .terminal-log {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--accent)) transparent;
   }
 }
 
@@ -113,7 +103,6 @@
     text-shadow: 0 0 12px hsl(var(--accent) / 0.8);
   }
 
-  /* Gradient text matching the screenshot */
   .text-gradient-brand {
     background: linear-gradient(90deg, #1E88E5, #67E8F9, #1E88E5);
     -webkit-background-clip: text;
@@ -122,7 +111,7 @@
 }
 
 /* ============================================= */
-/* 4. Extra Fixes for Mobile Arrangement        */
+/* 4. Mobile & Video Fixes                      */
 /* ============================================= */
 @media (max-width: 768px) {
   .container {
@@ -131,41 +120,24 @@
   }
 
   h1 {
-    font-size: 3.5rem !important;  /* Better mobile sizing */
+    font-size: 3.5rem !important;
   }
 
   h2 {
     font-size: 2.5rem !important;
   }
-
-  p.text-2xl {
-    font-size: 1.25rem !important;
-  }
-
-  .flex-col sm:flex-row {
-    flex-direction: column !important;
-  }
-
-  .video-container {
-    border-radius: 12px;
-  }
 }
 
-/* Video container (fixes brown box alignment) */
+/* Video container (used in landing/demo) */
 .video-container {
   position: relative;
   overflow: hidden;
   border-radius: 16px;
-  background-color: hsl(var(--card));  /* Dark background if video fails */
+  background-color: hsl(var(--card));
 }
 
 .video-container video {
   width: 100%;
   height: 100%;
-  object-fit: contain;  /* Changed to contain for better mobile fit */
-}
-
-/* Purple/blue glow border around demo box (matches screenshot) */
-.cyber-card {
-  box-shadow: 0 0 20px rgba(103, 232, 249, 0.4);
+  object-fit: contain;
 }
